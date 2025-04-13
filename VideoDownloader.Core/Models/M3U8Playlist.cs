@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace VideoDownloader.Core.Models;
 
 /// <summary>
@@ -60,6 +62,73 @@ public class M3U8Quality
     /// Gets or sets the codecs used in this variant
     /// </summary>
     public string? Codecs { get; set; }
+
+    /// <summary>
+    /// Gets a user-friendly display name for the quality, e.g., "1080p (5200 kbps)" or "Audio (128 kbps)"
+    /// </summary>
+    public string DisplayName
+    {
+        get
+        {
+            var sb = new StringBuilder();
+            bool hasInfo = false;
+
+            // Try to extract vertical resolution (e.g., 1080 from "1920x1080")
+            if (!string.IsNullOrEmpty(Resolution))
+            {
+                var parts = Resolution.Split('x');
+                if (parts.Length == 2 && int.TryParse(parts[1], out int height))
+                {
+                    sb.Append($"{height}p");
+                    hasInfo = true;
+                }
+                else
+                {
+                    // Fallback if resolution format is unexpected
+                    sb.Append(Resolution);
+                    hasInfo = true;
+                }
+            }
+
+            // Add bandwidth in kbps or Mbps
+            if (Bandwidth > 0)
+            {
+                if (hasInfo) sb.Append(" (");
+                if (Bandwidth >= 1_000_000) // >= 1 Mbps
+                {
+                    sb.Append($"{Bandwidth / 1_000_000.0:F1} Mbps");
+                }
+                else // < 1 Mbps, show in kbps
+                {
+                    sb.Append($"{Bandwidth / 1000} kbps");
+                }
+                if (hasInfo) sb.Append(")");
+                hasInfo = true; // Mark that we have bandwidth info even if resolution was missing
+            }
+
+            // Fallback if no resolution or bandwidth info is present
+            if (!hasInfo)
+            {
+                // Check codecs for audio-only hint
+                if (!string.IsNullOrEmpty(Codecs) && (Codecs.Contains("mp4a", StringComparison.OrdinalIgnoreCase) || Codecs.Contains("aac", StringComparison.OrdinalIgnoreCase)) && !Codecs.Contains("avc", StringComparison.OrdinalIgnoreCase) && !Codecs.Contains("hvc", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.Append("Audio");
+                    // Try adding bandwidth if available
+                    if (Bandwidth > 0)
+                    {
+                        sb.Append($" ({Bandwidth / 1000} kbps)");
+                    }
+                }
+                else
+                {
+                    // Generic fallback
+                    sb.Append($"Variant {Bandwidth}"); // Or use index if available?
+                }
+            }
+
+            return sb.ToString();
+        }
+    }
 
     /// <summary>
     /// Gets or sets the URL to the playlist for this quality

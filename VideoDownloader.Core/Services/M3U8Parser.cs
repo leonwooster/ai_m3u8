@@ -214,7 +214,7 @@ public class M3U8Parser
         return attributes;
     }
 
-    private static string ResolveUrl(string url, string baseUrl)
+    public static string ResolveUrl(string url, string baseUrl)
     {
         if (string.IsNullOrEmpty(url))
             return string.Empty;

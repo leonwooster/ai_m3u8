@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "VideoDownloader.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "VideoDownloader.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
