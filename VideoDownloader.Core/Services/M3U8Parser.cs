@@ -23,7 +23,7 @@ public class M3U8Parser
     /// <returns>A parsed M3U8Playlist object</returns>
     public M3U8Playlist Parse(string content, string baseUrl)
     {
-        _logger.LogInformation("Parsing M3U8 playlist with base URL: {BaseUrl}", baseUrl);
+        _logger.LogDebug("Parsing M3U8 playlist with base URL: {BaseUrl}", baseUrl);
 
         var lines = content.Split('\n')
             .Select(line => line.Trim())
@@ -32,15 +32,18 @@ public class M3U8Parser
 
         if (!lines.Any() || !lines[0].StartsWith("#EXTM3U"))
         {
+            _logger.LogError("Invalid M3U8 playlist: Missing #EXTM3U header");
             throw new FormatException("Invalid M3U8 playlist: Missing #EXTM3U header");
         }
 
         // Check if this is a master playlist by looking for #EXT-X-STREAM-INF
         if (lines.Any(line => line.StartsWith("#EXT-X-STREAM-INF:")))
         {
+            _logger.LogDebug("Detected master playlist.");
             return ParseMasterPlaylist(lines, baseUrl);
         }
 
+        _logger.LogDebug("Detected media playlist.");
         return ParseMediaPlaylist(lines, baseUrl);
     }
 
@@ -75,6 +78,7 @@ public class M3U8Parser
             {
                 quality.Url = ResolveUrl(lines[i + 1], baseUrl);
                 playlist.Qualities.Add(quality);
+                _logger.LogDebug("Added quality: {Quality}", quality.DisplayName);
             }
         }
 
@@ -123,7 +127,8 @@ public class M3U8Parser
                 if (keyAttributes.TryGetValue("URI", out var keyUri))
                 {
                     encryptionKeyUrl = ResolveUrl(keyUri.Trim('"'), baseUrl);
-                    
+                    _logger.LogDebug("Detected encryption key URI: {KeyUri}", encryptionKeyUrl);
+
                     // Correctly handle potential "0x" prefix for IV
                     string? rawIV = keyAttributes.GetValueOrDefault("IV");
                     if (rawIV != null && rawIV.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -134,7 +139,7 @@ public class M3U8Parser
                     {
                         encryptionIV = rawIV;
                     }
-                    
+
                     if (!string.IsNullOrEmpty(encryptionKeyUrl) && !playlist.EncryptionKeys.ContainsKey(encryptionKeyUrl))
                     {
                         playlist.EncryptionKeys[encryptionKeyUrl] = string.Empty; // Key content to be fetched later
@@ -154,6 +159,7 @@ public class M3U8Parser
                 };
 
                 playlist.Segments.Add(segment);
+                _logger.LogDebug("Added segment: {Url}, Duration: {Duration}", segment.Url, segment.Duration);
             }
         }
 

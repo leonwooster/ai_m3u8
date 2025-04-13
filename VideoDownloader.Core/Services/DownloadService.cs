@@ -41,6 +41,7 @@ namespace VideoDownloader.Core.Services
         /// <returns>A list of found M3U8 playlists or an empty list if none found.</returns>
         public async Task<List<M3U8Playlist>> AnalyzeUrlAsync(string url)
         {
+            _logger.LogDebug("Starting analysis for URL: {Url}", url);
             if (!Uri.TryCreate(url, UriKind.Absolute, out var initialUri))
             {
                 _logger.LogError("Invalid URL format: {Url}", url);
@@ -57,6 +58,7 @@ namespace VideoDownloader.Core.Services
                 using var tempClient = new HttpClient(handler);
                 tempClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
 
+                _logger.LogDebug("Sending HTTP GET request to {Uri}", initialUri);
                 HttpResponseMessage response = await tempClient.GetAsync(initialUri);
                 response.EnsureSuccessStatusCode();
 
@@ -100,26 +102,15 @@ namespace VideoDownloader.Core.Services
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "HTTP request failed for URL: {Url}", url);
+                throw;
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "An unexpected error occurred while analyzing URL: {Url}", url);
+                _logger.LogError(ex, "Unexpected error during analysis of URL: {Url}", url);
+                throw;
             }
 
-            if (!foundPlaylists.Any())
-            {
-                _logger.LogWarning("No M3U8 playlists found for URL: {Url}", url);
-            }
-            else
-            {
-                 // Deduplicate based on the actual M3U8 URL (if master) or first segment URL (if media)
-                 foundPlaylists = foundPlaylists
-                    .GroupBy(p => p.Qualities.FirstOrDefault()?.Url ?? p.Segments.FirstOrDefault()?.Url ?? p.BaseUrl + "_unknown")
-                    .Select(g => g.First())
-                    .ToList();
-                 _logger.LogInformation("Found {Count} unique M3U8 playlist(s) after deduplication.", foundPlaylists.Count);
-            }
-
+            _logger.LogDebug("Analysis complete for URL: {Url}. Found {Count} playlists.", url, foundPlaylists.Count);
             return foundPlaylists;
         }
 
@@ -128,6 +119,8 @@ namespace VideoDownloader.Core.Services
             var playlists = new List<M3U8Playlist>();
             var htmlDoc = new HtmlDocument();
             htmlDoc.LoadHtml(htmlContent);
+
+            _logger.LogDebug("Loaded HTML document for parsing.");
 
             // Use HashSet to gather unique potential M3U8 URLs before fetching
             var uniquePotentialUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -156,13 +149,19 @@ namespace VideoDownloader.Core.Services
             htmlDoc.DocumentNode.SelectNodes("//source[@src]")?
                 .ToList().ForEach(node => AddPotentialUrl(node.GetAttributeValue("src", null)));
 
+            _logger.LogDebug("Parsed <source> tags.");
+
             // 2. Look in <video src="...">
              htmlDoc.DocumentNode.SelectNodes("//video[@src]")?
                 .ToList().ForEach(node => AddPotentialUrl(node.GetAttributeValue("src", null)));
 
+            _logger.LogDebug("Parsed <video> tags.");
+
             // 3. Look in <a href="...">
             htmlDoc.DocumentNode.SelectNodes("//a[@href]")?
                  .ToList().ForEach(node => AddPotentialUrl(node.GetAttributeValue("href", null)));
+
+            _logger.LogDebug("Parsed <a> tags.");
 
              // 4. Look inside <script> tags using Regex
             htmlDoc.DocumentNode.SelectNodes("//script")?
@@ -178,6 +177,8 @@ namespace VideoDownloader.Core.Services
                         }
                     }
                 });
+
+            _logger.LogDebug("Parsed <script> tags.");
 
             // 5. Generic Regex search on the whole HTML as a fallback
             var htmlMatches = M3u8UrlRegex.Matches(htmlContent);
@@ -251,6 +252,7 @@ namespace VideoDownloader.Core.Services
                 tempClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
                 tempClient.Timeout = TimeSpan.FromSeconds(15); // Add a timeout
 
+                _logger.LogDebug("Sending HTTP GET request to {AbsoluteUrl}", absoluteUrl);
                 HttpResponseMessage response = await tempClient.GetAsync(absoluteUrl);
                 if (response.IsSuccessStatusCode)
                 {
