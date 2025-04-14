@@ -9,52 +9,85 @@
     mc:Ignorable="d"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
-    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" ColumnDefinitions="*,Auto" Padding="20">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnDefinitions="Auto,*,Auto" Padding="20">
 
-        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Video URL:" Margin="0,0,0,5"/>
+        <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Text="Video URL:" Margin="0,0,0,5"/>
 
         <TextBox x:Name="UrlTextBox"
-                 Grid.Row="1" Grid.Column="0"
+                 Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                  PlaceholderText="Enter M3U8 URL or page URL"
-                 Margin="0,0,10,10"/>
+                 Margin="0,0,0,10"/>
 
         <Button x:Name="AnalyzeButton"
-                Grid.Row="1" Grid.Column="1"
+                Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
                 Content="Analyze"
                 Click="AnalyzeButton_Click"
-                HorizontalAlignment="Stretch"/>
+                HorizontalAlignment="Stretch"
+                Margin="0,0,0,10"/>
 
         <ProgressRing x:Name="AnalysisProgressRing"
-                      Grid.Row="1" Grid.Column="1"
+                      Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
                       IsActive="False"
                       Width="20" Height="20"
                       HorizontalAlignment="Center" VerticalAlignment="Center"
                       Visibility="Collapsed"/> <!-- Initially hidden -->
 
-        <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="Available Streams/Qualities:" Margin="0,10,0,5"/>
+        <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Text="Available Streams/Qualities:" Margin="0,10,0,5"/>
 
         <ComboBox x:Name="QualityComboBox"
-                  Grid.Row="3" Grid.ColumnSpan="2"
+                  Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
                   PlaceholderText="Select quality..."
                   IsEnabled="False"
+                  SelectionChanged="Input_Changed"
                   HorizontalAlignment="Stretch"
                   Margin="0,0,0,10"/>
         <!-- ItemsSource will be bound or set in code-behind -->
         <!-- DisplayMemberPath will be set to "DisplayName" -->
 
+        <TextBlock Grid.Row="5" Grid.Column="0" Text="Output Path:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBox x:Name="OutputPathTextBox"
+                 Grid.Row="5" Grid.Column="1"
+                 PlaceholderText="Select output folder..."
+                 IsReadOnly="True"
+                 Margin="0,0,0,10" TextChanged="Input_Changed"/>
+        <!-- Make it read-only -->
+        <Button x:Name="BrowseButton"
+                Grid.Row="5" Grid.Column="2"
+                Content="Browse..."
+                Click="BrowseButton_Click"
+                Margin="5,0,0,10"/>
+        <TextBlock Grid.Row="6" Grid.Column="0" Text="Output File Name:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBox x:Name="OutputFileNameTextBox"
+                 Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2"
+                 PlaceholderText="e.g., my_video.mp4"
+                 Margin="0,0,0,10" TextChanged="Input_Changed"/>
+        <!-- Span across text and button columns -->
+
+        <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,10">
+            <Button x:Name="DownloadButton"
+                    Content="Download Selected"
+                    IsEnabled="False"
+                    Click="DownloadButton_Click"
+                    Margin="0,0,10,0"/>
+            <Button x:Name="CancelButton"
+                    Content="Cancel"
+                    IsEnabled="False"
+                    Visibility="Collapsed" 
+                    Click="CancelButton_Click"
+                    Margin="0,0,10,0"/>
+        </StackPanel>
+
+        <ProgressBar x:Name="DownloadProgressBar"
+                     Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="3"
+                     Minimum="0" Maximum="100"
+                     Visibility="Collapsed" 
+                     Margin="0,0,0,10"/>
+
         <TextBlock x:Name="StatusTextBlock"
-                   Grid.Row="4" Grid.ColumnSpan="2"
+                   Grid.Row="9" Grid.Column="0" Grid.ColumnSpan="3"
                    TextWrapping="Wrap"
                    VerticalAlignment="Top"
                    Foreground="Gray"/>
-
-        <!-- Add Download Button later -->
-         <!-- <Button x:Name="DownloadButton"
-                Grid.Row="5" Grid.ColumnSpan="2"
-                Content="Download Selected"
-                IsEnabled="False"
-                HorizontalAlignment="Center"
-                Margin="0,20,0,0"/> -->
 
     </Grid>
 </Page>

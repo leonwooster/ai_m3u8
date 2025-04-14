@@ -7,6 +7,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Diagnostics; // For Process
+using System.Threading; // For CancellationToken
 using VideoDownloader.Core.Models;
 
 namespace VideoDownloader.Core.Services
@@ -303,6 +305,317 @@ namespace VideoDownloader.Core.Services
             catch (Exception ex)
             {
                  _logger.LogError(ex, "Unexpected error fetching/parsing potential M3U8 from {AbsoluteUrl}", absoluteUrl);
+            }
+        }
+
+        // Add within the VideoDownloader.Core namespace, perhaps in a Models folder eventually
+        public class DownloadProgressInfo
+        {
+            public int TotalSegments { get; set; }
+            public int DownloadedSegments { get; set; }
+            public string? CurrentAction { get; set; } // e.g., "Downloading", "Merging"
+            public double? ProgressPercentage => TotalSegments > 0 ? (double)DownloadedSegments / TotalSegments * 100 : 0;
+        }
+
+        public async Task DownloadVideoAsync(M3U8Playlist playlist, string outputDirectory, string outputFileName, IProgress<DownloadProgressInfo> progress, CancellationToken cancellationToken)
+        {
+            if (playlist == null || !playlist.Segments.Any())
+            {
+                _logger.LogError("Download failed: Playlist is null or contains no segments.");
+                // Report failure? Throw exception?
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(outputDirectory) || string.IsNullOrWhiteSpace(outputFileName))
+            {
+                _logger.LogError("Download failed: Output directory or filename is invalid.");
+                // Report failure? Throw exception?
+                return;
+            }
+
+            string tempDirectory = Path.Combine(Path.GetTempPath(), $"m3u8dl_{Guid.NewGuid()}");
+            string finalOutputPath = Path.Combine(outputDirectory, outputFileName + ".mp4"); // Assuming MP4 for now
+
+            _logger.LogInformation("Starting download for playlist based at {BaseUrl}. Output: {OutputPath}", playlist.BaseUrl, finalOutputPath);
+            _logger.LogDebug("Temporary segment directory: {TempDir}", tempDirectory);
+
+            var progressInfo = new DownloadProgressInfo
+            {
+                TotalSegments = playlist.Segments.Count,
+                DownloadedSegments = 0,
+                CurrentAction = "Initializing"
+            };
+
+            try
+            {
+                Directory.CreateDirectory(tempDirectory);
+                progress?.Report(progressInfo);
+
+                // --- 1. Download Segments ---
+                _logger.LogInformation("Downloading {SegmentCount} segments...", playlist.Segments.Count);
+                progressInfo.CurrentAction = "Downloading";
+                progress?.Report(progressInfo);
+
+                int maxConcurrentDownloads = 8; // Concurrency limit
+                using var semaphore = new SemaphoreSlim(maxConcurrentDownloads);
+                var downloadTasks = new List<Task>();
+                var segmentFiles = new List<(int Index, string Path)>(); // Store index for ordering
+                int downloadedCount = 0;
+                object lockObject = new object(); // For thread-safe updates to shared lists/counts
+
+                for (int i = 0; i < playlist.Segments.Count; i++)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    await semaphore.WaitAsync(cancellationToken); // Wait for a download slot
+
+                    int currentIndex = i; // Capture loop variable for closure
+                    M3U8Segment currentSegment = playlist.Segments[currentIndex];
+
+                    downloadTasks.Add(Task.Run(async () => // Use Task.Run to avoid blocking the main loop
+                    {
+                        string segmentUrl = M3U8Parser.ResolveUrl(currentSegment.Url, playlist.BaseUrl);
+                        string segmentFileName = $"segment_{currentIndex:D5}.ts"; // Assuming .ts, might need adjustment
+                        string segmentFilePath = Path.Combine(tempDirectory, segmentFileName);
+
+                        try
+                        {
+                            if (string.IsNullOrEmpty(segmentUrl))
+                            {
+                                _logger.LogWarning("Skipping segment {Index} due to invalid/unresolved URL: {RelativeUrl}", currentIndex, currentSegment.Url);
+                                // Consider how to handle this - fail the download? Skip?
+                                return; // Skip this segment
+                            }
+
+                            // TODO: Add retry logic if needed
+                            using var response = await _httpClient.GetAsync(segmentUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                            response.EnsureSuccessStatusCode();
+
+                            using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                            using var fileStream = new FileStream(segmentFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+                            await contentStream.CopyToAsync(fileStream, cancellationToken);
+
+                            lock (lockObject)
+                            {
+                                segmentFiles.Add((currentIndex, segmentFilePath));
+                                downloadedCount++;
+                                progressInfo.DownloadedSegments = downloadedCount;
+                            }
+                            progress?.Report(progressInfo); // Report progress after each successful download
+                            _logger.LogTrace("Successfully downloaded segment {Index} to {Path}", currentIndex, segmentFilePath);
+
+                        }
+                        catch (HttpRequestException ex)
+                        {
+                            _logger.LogError(ex, "Failed to download segment {Index} from {Url}", currentIndex, segmentUrl);
+                            // Decide failure strategy: Stop all? Mark failed? Retry?
+                            // For now, rethrow to fail the entire download
+                            throw new InvalidOperationException($"Failed to download segment {currentIndex}", ex);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            _logger.LogDebug("Cancellation requested during segment {Index} download.", currentIndex);
+                            // Let the main cancellation handling catch this
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                             _logger.LogError(ex, "Unexpected error downloading segment {Index} from {Url}", currentIndex, segmentUrl);
+                             throw new InvalidOperationException($"Unexpected error downloading segment {currentIndex}", ex);
+                        }
+                        finally
+                        {
+                            semaphore.Release(); // Release the download slot
+                        }
+                    }, cancellationToken));
+                }
+
+                // Wait for all download tasks to complete or for cancellation/failure
+                try
+                {
+                    await Task.WhenAll(downloadTasks);
+                }
+                catch (Exception)
+                {
+                    // Exception (including cancellation or download failure) already logged within tasks.
+                    // Allow the main try-catch block's cancellation/failure handling to take over.
+                    throw; // Rethrow to trigger outer catch blocks
+                }
+
+                cancellationToken.ThrowIfCancellationRequested(); // Explicit check after waiting
+
+                if (downloadedCount != playlist.Segments.Count)
+                {
+                    // This might happen if some segments were skipped due to invalid URLs or other non-exception issues handled within the loop
+                     _logger.LogError("Download failed: Not all segments were downloaded successfully ({Downloaded}/{Total}).", downloadedCount, playlist.Segments.Count);
+                     throw new InvalidOperationException("Segment download incomplete.");
+                }
+
+                // Sort segments by index before merging
+                segmentFiles.Sort((a, b) => a.Index.CompareTo(b.Index));
+                var sortedSegmentPaths = segmentFiles.Select(sf => sf.Path).ToList();
+
+                // --- 2. Merge Segments ---
+                progressInfo.CurrentAction = "Merging";
+                progress?.Report(progressInfo);
+
+                string segmentsListPath = Path.Combine(tempDirectory, "segments.txt");
+                await CreateSegmentListFile(segmentsListPath, sortedSegmentPaths, cancellationToken);
+
+                await ExecuteFFmpegMerge(segmentsListPath, finalOutputPath, cancellationToken);
+
+                // --- 3. Cleanup ---
+                // Cleanup handled in finally block
+
+                _logger.LogInformation("Download and merge completed successfully: {FinalOutputPath}", finalOutputPath);
+                progressInfo.CurrentAction = "Completed";
+                progress?.Report(progressInfo);
+
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Download cancelled by user.");
+                progressInfo.CurrentAction = "Cancelled";
+                progress?.Report(progressInfo);
+                // Optionally delete partial final file if it exists
+                // File.Delete(finalOutputPath); // Consider if partial merge output should be kept
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Download failed for playlist {BaseUrl}", playlist.BaseUrl);
+                progressInfo.CurrentAction = "Failed";
+                progress?.Report(progressInfo);
+                // Optionally delete partial final file if it exists
+                // File.Delete(finalOutputPath);
+                // Rethrow or handle appropriately
+                throw;
+            }
+            finally
+            {
+                // --- Cleanup ---
+                if (Directory.Exists(tempDirectory))
+                {
+                    _logger.LogDebug("Cleaning up temporary directory: {TempDir}", tempDirectory);
+                    try
+                    {
+                        Directory.Delete(tempDirectory, true);
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        _logger.LogError(cleanupEx, "Failed to delete temporary directory: {TempDir}", tempDirectory);
+                    }
+                }
+            }
+        }
+
+        private async Task CreateSegmentListFile(string listFilePath, IEnumerable<string> segmentPaths, CancellationToken cancellationToken)
+        {
+            _logger.LogDebug("Creating segment list file at: {ListFilePath}", listFilePath);
+            try
+            {
+                // FFmpeg concat demuxer requires forward slashes even on Windows if using relative paths
+                // within the list file, but since we use full paths, backslashes are usually fine.
+                // However, it's safer to escape backslashes or use forward slashes if needed.
+                // The '-safe 0' option helps with various path issues.
+                var lines = segmentPaths.Select(p => $"file '{p.Replace("'", "'\\''")}'"); // Basic escaping for single quotes in paths
+
+                await File.WriteAllLinesAsync(listFilePath, lines, cancellationToken);
+                _logger.LogDebug("Successfully created segment list file with {Count} entries.", lines.Count());
+            }
+            catch (Exception ex)
+            {
+                 _logger.LogError(ex, "Failed to create segment list file: {ListFilePath}", listFilePath);
+                 throw new IOException($"Failed to create segment list file '{listFilePath}'.", ex);
+            }
+        }
+
+        private async Task ExecuteFFmpegMerge(string segmentsListPath, string finalOutputPath, CancellationToken cancellationToken)
+        {
+            string ffmpegPath = "ffmpeg"; // Assume ffmpeg is in PATH. Adjust if necessary.
+            // Use quotes around paths to handle potential spaces, although temp/output paths might not have them.
+            string arguments = $"-f concat -safe 0 -i \"{segmentsListPath}\" -c copy \"{finalOutputPath}\" -loglevel error"; // Log only errors from ffmpeg
+
+            _logger.LogInformation("Executing FFmpeg command: {Command} {Args}", ffmpegPath, arguments);
+
+            var processStartInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            Process? process = null;
+            try
+            {
+                process = Process.Start(processStartInfo);
+
+                if (process == null)
+                {
+                    throw new InvalidOperationException("Failed to start FFmpeg process.");
+                }
+
+                // Asynchronously read output/error streams to prevent deadlocks
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+
+                // Wait for the process to exit or cancellation
+                await process.WaitForExitAsync(cancellationToken);
+
+                string stdOut = await outputTask;
+                string stdErr = await errorTask;
+
+
+                if (process.ExitCode != 0)
+                {
+                    _logger.LogError("FFmpeg process failed with Exit Code: {ExitCode}. Output: {StdOut}. Error: {StdErr}", process.ExitCode, stdOut, stdErr);
+                    // Attempt to delete potentially corrupted output file
+                    try { if (File.Exists(finalOutputPath)) File.Delete(finalOutputPath); } catch { /* Ignore delete error */ }
+                    throw new InvalidOperationException($"FFmpeg merging failed (Exit Code: {process.ExitCode}). Check logs and ensure FFmpeg is installed correctly. Error output: {stdErr}");
+                }
+                else
+                {
+                     _logger.LogInformation("FFmpeg process completed successfully.");
+                     if (!string.IsNullOrWhiteSpace(stdOut)) _logger.LogDebug("FFmpeg Output: {StdOut}", stdOut);
+                     if (!string.IsNullOrWhiteSpace(stdErr)) _logger.LogDebug("FFmpeg Error Output: {StdErr}", stdErr); // Log errors even on success for debugging
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("FFmpeg merge operation cancelled.");
+                if (process != null && !process.HasExited)
+                {
+                    try
+                    {
+                        _logger.LogWarning("Attempting to kill FFmpeg process due to cancellation.");
+                        process.Kill(entireProcessTree: true); // Try to kill the entire process tree
+                    }
+                    catch (Exception killEx)
+                    {
+                        _logger.LogError(killEx, "Failed to kill FFmpeg process during cancellation.");
+                    }
+                    // Attempt to delete potentially partial output file
+                    try { if (File.Exists(finalOutputPath)) File.Delete(finalOutputPath); } catch { /* Ignore delete error */ }
+                }
+                throw; // Re-throw cancellation exception
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 2) // Error code for "File Not Found"
+            {
+                _logger.LogError(ex, "FFmpeg executable not found at '{Path}'. Ensure FFmpeg is installed and in the system PATH.", ffmpegPath);
+                throw new FileNotFoundException($"FFmpeg executable ('{ffmpegPath}') not found. Please install FFmpeg and ensure it's in your PATH environment variable.", ffmpegPath, ex);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while running FFmpeg.");
+                 // Attempt to delete potentially corrupted output file
+                try { if (File.Exists(finalOutputPath)) File.Delete(finalOutputPath); } catch { /* Ignore delete error */ }
+                throw new InvalidOperationException("Failed to merge segments using FFmpeg.", ex);
+            }
+            finally
+            {
+                 process?.Dispose();
             }
         }
 

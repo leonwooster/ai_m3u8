@@ -16,6 +16,20 @@ namespace VideoDownloader.WinUI
         private Window? window;
 
         /// <summary>
+        /// Provides access to the main application window.
+        /// Throws an exception if accessed before the window is initialized.
+        /// </summary>
+        public Window MainWindow
+        {
+            get
+            {
+                // Ensure window is initialized before accessing
+                // Should be initialized by OnLaunched before this is needed
+                return window ?? throw new InvalidOperationException("The main application window is not initialized yet.");
+            }
+        }
+
+        /// <summary>
         /// Configures the services for the application.
         /// </summary>
         private static IServiceProvider ConfigureServices()
