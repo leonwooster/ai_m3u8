@@ -63,31 +63,62 @@
                  Margin="0,0,0,10" TextChanged="Input_Changed"/>
         <!-- Span across text and button columns -->
 
-        <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,10">
-            <Button x:Name="DownloadButton"
-                    Content="Download Selected"
-                    IsEnabled="False"
-                    Click="DownloadButton_Click"
-                    Margin="0,0,10,0"/>
-            <Button x:Name="CancelButton"
-                    Content="Cancel"
-                    IsEnabled="False"
-                    Visibility="Collapsed" 
-                    Click="CancelButton_Click"
-                    Margin="0,0,10,0"/>
+        <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Margin="0,10,0,0">
+            <Expander Header="Download Settings" IsExpanded="False" Margin="0,0,0,10">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Max Concurrent Downloads:" VerticalAlignment="Center" Margin="0,0,10,5"/>
+                    <NumberBox Grid.Row="0" Grid.Column="1" x:Name="MaxConcurrentDownloadsBox" Value="3" Minimum="1" Maximum="16" SpinButtonPlacementMode="Inline" SmallChange="1"/>
+                    
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Max Retries:" VerticalAlignment="Center" Margin="0,0,10,5"/>
+                    <NumberBox Grid.Row="1" Grid.Column="1" x:Name="MaxRetriesBox" Value="3" Minimum="0" Maximum="10" SpinButtonPlacementMode="Inline" SmallChange="1"/>
+                    
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Retry Delay (ms):" VerticalAlignment="Center" Margin="0,0,10,5"/>
+                    <NumberBox Grid.Row="2" Grid.Column="1" x:Name="RetryDelayBox" Value="2000" Minimum="500" Maximum="10000" SpinButtonPlacementMode="Inline" SmallChange="500"/>
+                </Grid>
+            </Expander>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button x:Name="DownloadButton"
+                        Content="Download Selected"
+                        IsEnabled="False"
+                        Click="DownloadButton_Click"
+                        Margin="0,0,10,0"/>
+                <Button x:Name="CancelButton"
+                        Content="Cancel"
+                        IsEnabled="False"
+                        Visibility="Collapsed" 
+                        Click="CancelButton_Click"
+                        Margin="0,0,10,0"/>
+            </StackPanel>
         </StackPanel>
 
         <ProgressBar x:Name="DownloadProgressBar"
                      Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="3"
                      Minimum="0" Maximum="100"
-                     Visibility="Collapsed" 
-                     Margin="0,0,0,10"/>
+                     Margin="0,10,0,0"
+                     Height="20"
+                     Visibility="Collapsed" />
 
-        <TextBlock x:Name="StatusTextBlock"
-                   Grid.Row="9" Grid.Column="0" Grid.ColumnSpan="3"
-                   TextWrapping="Wrap"
-                   VerticalAlignment="Top"
-                   Foreground="Gray"/>
+        <StackPanel Grid.Row="9" Grid.Column="0" Grid.ColumnSpan="3" 
+                    Margin="0,5,0,0" 
+                    Spacing="4">
+            <TextBlock x:Name="StatusText"
+                       Text=""
+                       TextWrapping="Wrap"/>
+            <TextBlock x:Name="ProgressText"
+                       Text=""
+                       Foreground="{ThemeResource SystemAccentColor}"
+                       TextWrapping="Wrap"/>
+        </StackPanel>
 
     </Grid>
 </Page>

@@ -64,6 +64,11 @@ public class M3U8Quality
     public string? Codecs { get; set; }
 
     /// <summary>
+    /// Gets or sets a user-friendly name for this quality variant
+    /// </summary>
+    public string Name => DisplayName;
+
+    /// <summary>
     /// Gets a user-friendly display name for the quality, e.g., "1080p (5200 kbps)" or "Audio (128 kbps)"
     /// </summary>
     public string DisplayName

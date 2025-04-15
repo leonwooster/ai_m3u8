@@ -22,6 +22,7 @@ namespace VideoDownloader.Core.Services
         private readonly HttpClient _httpClient; // Primary client, maybe from factory
         private readonly M3U8Parser _m3u8Parser;
         private readonly ILogger<DownloadService> _logger;
+        private DownloadSettings _settings;
 
         // Regex to find potential M3U8 URLs in HTML or JS (handles optional // prefix)
         private static readonly Regex M3u8UrlRegex = new Regex(
@@ -33,6 +34,13 @@ namespace VideoDownloader.Core.Services
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _m3u8Parser = m3u8Parser ?? throw new ArgumentNullException(nameof(m3u8Parser));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _settings = new DownloadSettings(); // Default settings
+        }
+
+        public DownloadSettings Settings
+        {
+            get => _settings;
+            set => _settings = value ?? new DownloadSettings();
         }
 
         /// <summary>
@@ -319,18 +327,59 @@ namespace VideoDownloader.Core.Services
 
         public async Task DownloadVideoAsync(M3U8Playlist playlist, string outputDirectory, string outputFileName, IProgress<DownloadProgressInfo> progress, CancellationToken cancellationToken)
         {
-            if (playlist == null || !playlist.Segments.Any())
+            if (playlist == null)
             {
-                _logger.LogError("Download failed: Playlist is null or contains no segments.");
-                // Report failure? Throw exception?
-                return;
+                _logger.LogError("Download failed: Playlist is null");
+                throw new ArgumentNullException(nameof(playlist));
             }
 
             if (string.IsNullOrWhiteSpace(outputDirectory) || string.IsNullOrWhiteSpace(outputFileName))
             {
                 _logger.LogError("Download failed: Output directory or filename is invalid.");
-                // Report failure? Throw exception?
-                return;
+                throw new ArgumentException("Output directory or filename is invalid");
+            }
+
+            // If this is a master playlist, we need to select a quality variant
+            if (playlist.IsMasterPlaylist)
+            {
+                if (!playlist.Qualities.Any())
+                {
+                    _logger.LogError("Master playlist contains no quality variants");
+                    throw new InvalidOperationException("Master playlist contains no quality variants");
+                }
+
+                // Get the selected quality variant
+                var selectedQuality = playlist.Qualities.FirstOrDefault();
+                if (selectedQuality == null)
+                {
+                    _logger.LogError("No quality variant selected from master playlist");
+                    throw new InvalidOperationException("No quality variant selected from master playlist");
+                }
+
+                _logger.LogInformation("Selected quality variant: {Quality}", selectedQuality.Name);
+
+                // Fetch and parse the variant playlist
+                string variantUrl = M3U8Parser.ResolveUrl(selectedQuality.Url, playlist.BaseUrl);
+                _logger.LogInformation("Fetching variant playlist from: {Url}", variantUrl);
+
+                using var handler = new HttpClientHandler { AllowAutoRedirect = true };
+                using var tempClient = new HttpClient(handler);
+                var response = await tempClient.GetAsync(variantUrl, cancellationToken);
+                response.EnsureSuccessStatusCode();
+
+                string content = await response.Content.ReadAsStringAsync(cancellationToken);
+                Uri finalUri = response.RequestMessage?.RequestUri ?? new Uri(variantUrl);
+                string variantBaseUrl = GetBaseUrl(finalUri);
+
+                // Parse the variant playlist
+                playlist = _m3u8Parser.Parse(content, variantBaseUrl);
+            }
+
+            // Now check if we have segments to download
+            if (!playlist.Segments.Any())
+            {
+                _logger.LogError("Download failed: Playlist contains no segments");
+                throw new InvalidOperationException("Playlist contains no segments");
             }
 
             string tempDirectory = Path.Combine(Path.GetTempPath(), $"m3u8dl_{Guid.NewGuid()}");
@@ -356,8 +405,7 @@ namespace VideoDownloader.Core.Services
                 progressInfo.CurrentAction = "Downloading";
                 progress?.Report(progressInfo);
 
-                int maxConcurrentDownloads = 8; // Concurrency limit
-                using var semaphore = new SemaphoreSlim(maxConcurrentDownloads);
+                using var semaphore = new SemaphoreSlim(_settings.MaxConcurrentDownloads);
                 var downloadTasks = new List<Task>();
                 var segmentFiles = new List<(int Index, string Path)>(); // Store index for ordering
                 int downloadedCount = 0;
@@ -387,13 +435,49 @@ namespace VideoDownloader.Core.Services
                                 return; // Skip this segment
                             }
 
-                            // TODO: Add retry logic if needed
-                            using var response = await _httpClient.GetAsync(segmentUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                            response.EnsureSuccessStatusCode();
+                            int retryCount = 0;
+                            bool downloadSuccess = false;
+                            Exception? lastException = null;
 
-                            using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                            using var fileStream = new FileStream(segmentFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
-                            await contentStream.CopyToAsync(fileStream, cancellationToken);
+                            while (retryCount < _settings.MaxRetries && !downloadSuccess)
+                            {
+                                try
+                                {
+                                    if (retryCount > 0)
+                                    {
+                                        _logger.LogInformation("Retrying segment {Index} download (attempt {Attempt}/{MaxRetries})", currentIndex, retryCount + 1, _settings.MaxRetries);
+                                        await Task.Delay(_settings.RetryDelayMs * retryCount, cancellationToken); // Exponential backoff
+                                    }
+
+                                    using var response = await _httpClient.GetAsync(segmentUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                                   
+                                    // Special handling for Cloudflare errors
+                                    if ((int)response.StatusCode == 520 || (int)response.StatusCode == 524)
+                                    {
+                                        _logger.LogWarning("Cloudflare error {StatusCode} for segment {Index}. Will retry.", (int)response.StatusCode, currentIndex);
+                                        throw new HttpRequestException($"Cloudflare error {response.StatusCode}");
+                                    }
+
+                                    response.EnsureSuccessStatusCode();
+
+                                    using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                                    using var fileStream = new FileStream(segmentFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+                                    await contentStream.CopyToAsync(fileStream, cancellationToken);
+
+                                    downloadSuccess = true;
+                                }
+                                catch (Exception ex) when (ex is HttpRequestException || ex is IOException)
+                                {
+                                    lastException = ex;
+                                    retryCount++;
+
+                                    if (retryCount >= _settings.MaxRetries)
+                                    {
+                                        _logger.LogError(ex, "Failed to download segment {Index} after {MaxRetries} attempts", currentIndex, _settings.MaxRetries);
+                                        throw new InvalidOperationException($"Failed to download segment {currentIndex} after {_settings.MaxRetries} attempts", ex);
+                                    }
+                                }
+                            }
 
                             lock (lockObject)
                             {
@@ -408,8 +492,7 @@ namespace VideoDownloader.Core.Services
                         catch (HttpRequestException ex)
                         {
                             _logger.LogError(ex, "Failed to download segment {Index} from {Url}", currentIndex, segmentUrl);
-                            // Decide failure strategy: Stop all? Mark failed? Retry?
-                            // For now, rethrow to fail the entire download
+                            // Rethrow to fail the entire download since retries were exhausted
                             throw new InvalidOperationException($"Failed to download segment {currentIndex}", ex);
                         }
                         catch (OperationCanceledException)

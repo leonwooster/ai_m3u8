@@ -17,6 +17,8 @@ using System.IO; // For Directory, Path, File
 using Windows.Storage;
 using Windows.Storage.Pickers; // For FolderPicker
 using WinRT.Interop; // For InitializeWithWindow
+using System.Diagnostics; // For Debug.WriteLine
+using VideoDownloader.Core.Models;
 
 namespace VideoDownloader.WinUI.Views
 {
@@ -36,20 +38,49 @@ namespace VideoDownloader.WinUI.Views
 
         public MainPage()
         {
-            this.InitializeComponent();
+            InitializeComponent();
 
-            // Resolve dependencies from App.Services
+            // Resolve dependencies from App.Services first
             // Note: Proper MVVM/DI frameworks offer cleaner ways than service location.
-            var app = (App)Application.Current;
-            _downloadService = app.Services.GetRequiredService<DownloadService>();
-            _logger = app.Services.GetRequiredService<ILogger<MainPage>>();
+            _downloadService = (Application.Current as App)?.Services.GetService<DownloadService>()
+                ?? throw new InvalidOperationException("Failed to resolve DownloadService");
+            _logger = (Application.Current as App)?.Services.GetService<ILogger<MainPage>>()
+                ?? throw new InvalidOperationException("Failed to resolve ILogger<MainPage>");
 
-             // Example URL for testing (optional)
+            // Initialize download settings UI with defaults
+            var defaultSettings = _downloadService.Settings;
+            MaxConcurrentDownloadsBox.Value = defaultSettings.MaxConcurrentDownloads;
+            MaxRetriesBox.Value = defaultSettings.MaxRetries;
+            RetryDelayBox.Value = defaultSettings.RetryDelayMs;
+
+            // Set default values
+            UrlTextBox.Text = "https://cdn3.turboviplay.com/data2/czguC33CoaeM2cXkT8ty/czguC33CoaeM2cXkT8ty.m3u8";
+            OutputPathTextBox.Text = @"D:\Temp";
+            OutputFileNameTextBox.Text = "a.mp4";
+
+            // Create default output directory if it doesn't exist
+            try
+            {
+                if (!Directory.Exists(@"D:\Temp"))
+                {
+                    Directory.CreateDirectory(@"D:\Temp");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not create default output directory D:\\Temp");
+            }
+
+            // Update UI state based on default values
+            UpdateDownloadButtonState();
+
+            // Example URL for testing (optional)
             // UrlTextBox.Text = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8";
         }
 
         private async void AnalyzeButton_Click(object sender, RoutedEventArgs e)
         {
+            _logger.LogInformation("Starting URL analysis: {Url}", UrlTextBox.Text);
             string url = UrlTextBox.Text?.Trim();
             if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out _))
             {
@@ -88,7 +119,7 @@ namespace VideoDownloader.WinUI.Views
             {
                  StatusTextBlock.Text = $"Error: {argEx.Message}";
                  StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
-                 _logger.LogWarning(argEx, "Invalid URL provided by user: {Url}", url);
+                 _logger.LogError(argEx, "Invalid URL provided by user: {Url}", url);
             }
             catch (HttpRequestException httpEx)
             {
@@ -104,6 +135,7 @@ namespace VideoDownloader.WinUI.Views
             }
             finally
             {
+                _logger.LogInformation("URL analysis completed");
                 SetAnalysisState(false);
             }
         }
@@ -164,128 +196,186 @@ namespace VideoDownloader.WinUI.Views
 
         private async void DownloadButton_Click(object sender, RoutedEventArgs e)
         {
-            var selectedItem = QualityComboBox.SelectedItem as ComboBoxItemViewModel;
-            string outputPath = OutputPathTextBox.Text?.Trim(); // Assuming OutputPathTextBox exists
-            string outputFileName = OutputFileNameTextBox.Text?.Trim(); // Assuming OutputFileNameTextBox exists
+            Debug.WriteLine("DownloadButton_Click ENTERED - Checking if this line appears in Debug Output");
+            _logger.LogInformation("DownloadButton clicked.");
 
-            // --- Input Validation ---
-            if (selectedItem?.Playlist == null)
-            {
-                UpdateStatus("Please analyze a URL and select a stream first.", true);
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(outputPath) || !Directory.Exists(outputPath)) // Basic check
-            {
-                UpdateStatus("Please select a valid output folder.", true);
-                // Consider adding a Browse button later
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(outputFileName) || outputFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            {
-                UpdateStatus("Please enter a valid output file name (without extension).", true);
-                return;
-            }
-
-            // --- Prepare for Download ---
-            _downloadCts = new CancellationTokenSource();
-            var cancellationToken = _downloadCts.Token;
-
-            var progressHandler = new Progress<DownloadService.DownloadProgressInfo>(progressInfo =>
-            {
-                // Ensure UI updates run on the UI thread
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    DownloadProgressBar.Value = progressInfo.ProgressPercentage ?? 0; // Assuming DownloadProgressBar exists
-
-                    string progressText = $"{progressInfo.CurrentAction}: {progressInfo.DownloadedSegments}/{progressInfo.TotalSegments}";
-                    if (progressInfo.ProgressPercentage.HasValue)
-                    {
-                        progressText += $" ({progressInfo.ProgressPercentage.Value:F1}%)";
-                    }
-                    StatusTextBlock.Text = progressText;
-                    StatusTextBlock.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray); // Default progress color
-                });
-            });
-
-            // --- Update UI State ---
-            SetDownloadState(true);
-
-            // --- Start Download ---
             try
             {
-                _logger.LogInformation("Starting download for playlist: {PlaylistUrl}, Output: {OutputFile}",
-                    selectedItem.Playlist.BaseUrl ?? "N/A", Path.Combine(outputPath, outputFileName + ".mp4"));
+                var selectedItem = QualityComboBox.SelectedItem as ComboBoxItemViewModel;
+                string outputPath = OutputPathTextBox.Text?.Trim(); // Assuming OutputPathTextBox exists
+                string outputFileName = OutputFileNameTextBox.Text?.Trim(); // Assuming OutputFileNameTextBox exists
 
-                // *** Important: Decide how to handle master vs media playlist selection ***
-                // For now, we pass the Playlist object directly. DownloadVideoAsync currently expects
-                // a playlist containing actual segments. If selectedItem.Playlist is a master playlist,
-                // we might need an intermediate step to fetch the specific media playlist based on
-                // selected quality (or 'Auto').
-                // Let's assume for now selectedItem.Playlist IS the media playlist to download.
-                // If QualityComboBox can select variants from a master list, this needs adjustment here
-                // or within DownloadVideoAsync.
+                _logger.LogInformation("Selected Item: {Item}, Output Path: {Path}, Output Filename: {Filename}", 
+                                        selectedItem?.DisplayName ?? "null", 
+                                        outputPath ?? "null", 
+                                        outputFileName ?? "null");
 
-                M3U8Playlist playlistToDownload = selectedItem.Playlist;
-
-                // If it's a master playlist and a specific quality (or Auto) was chosen,
-                // we need to fetch that specific M3U8 first. This requires more logic.
-                // Simplified Approach: If it's a master, maybe just try downloading the *first* quality variant?
-                // This isn't ideal but avoids adding another fetch step right now.
-                if (playlistToDownload.IsMasterPlaylist)
+                // --- Input Validation ---
+                if (selectedItem?.Playlist == null)
                 {
-                    _logger.LogWarning("Selected item is a master playlist. Attempting to download the first quality variant. Refine this logic for specific quality selection.");
-                    var targetQualityUrl = selectedItem.GetTargetM3u8Url(); // Use the existing helper logic
-                    if (!string.IsNullOrEmpty(targetQualityUrl))
-                    {
-                         // We'd ideally fetch and parse targetQualityUrl here into a new M3U8Playlist object
-                         // and pass *that* to DownloadVideoAsync.
-                         // WORKAROUND: Let's just log a warning and proceed, hoping DownloadVideoAsync handles it gracefully (it likely won't yet).
-                         UpdateStatus($"Selected playlist is a master playlist. Downloading the 'best' variant ({targetQualityUrl}). This might not work as expected yet.", true);
-                         // Ideally: playlistToDownload = await FetchAndParseMediaPlaylist(targetQualityUrl);
-                    }
-                    else
-                    {
-                         UpdateStatus("Could not determine a specific media playlist URL from the selected master playlist.", true);
-                         SetDownloadState(false);
-                         return;
-                    }
-                     // For now, we still pass the master playlist, which is incorrect for DownloadVideoAsync
-                     // TODO: Fix this by fetching the media playlist before calling DownloadVideoAsync
+                    _logger.LogWarning("Download aborted: No quality selected.");
+                    UpdateStatus("Please select a quality/stream first.", true);
+                    return;
                 }
 
+                if (string.IsNullOrWhiteSpace(outputPath))
+                {
+                    _logger.LogWarning("Download aborted: Output path is empty.");
+                    UpdateStatus("Please select an output directory.", true);
+                    return;
+                }
+                if (!Directory.Exists(outputPath))
+                {
+                    _logger.LogWarning("Download aborted: Output directory does not exist: {Path}", outputPath);
+                    UpdateStatus($"Output directory does not exist: {outputPath}", true);
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(outputFileName))
+                {
+                    _logger.LogWarning("Download aborted: Output filename is empty.");
+                    UpdateStatus("Please enter an output file name.", true);
+                    return;
+                }
+                if (outputFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                {
+                    _logger.LogWarning("Download aborted: Output filename contains invalid characters: {Filename}", outputFileName);
+                    UpdateStatus("Output file name contains invalid characters.", true);
+                    return;
+                }
+                // Ensure filename doesn't end with .mp4 already, as we add it
+                if (outputFileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
+                {
+                    outputFileName = outputFileName.Substring(0, outputFileName.Length - 4);
+                }
 
-                await _downloadService.DownloadVideoAsync(playlistToDownload, outputPath, outputFileName, progressHandler, cancellationToken);
+                _logger.LogInformation("Input validation passed.");
 
-                // Success
-                 DispatcherQueue.TryEnqueue(() =>
-                 {
-                    UpdateStatus($"Download complete: {outputFileName}.mp4", false);
-                    DownloadProgressBar.Value = 100;
-                 });
-            }
-            catch (OperationCanceledException)
-            {
-                DispatcherQueue.TryEnqueue(() => UpdateStatus("Download cancelled.", false));
-                _logger.LogWarning("Download operation was cancelled.");
-            }
-             catch (FileNotFoundException fnfEx) // Specific case for FFmpeg not found
-            {
-                DispatcherQueue.TryEnqueue(() => UpdateStatus($"Error: {fnfEx.Message}", true));
-                _logger.LogError(fnfEx, "FFmpeg not found during download.");
+                // --- Prepare for Download ---
+                _downloadCts = new CancellationTokenSource();
+                var cancellationToken = _downloadCts.Token;
+
+                var progressHandler = new Progress<DownloadService.DownloadProgressInfo>(progressInfo =>
+                {
+                    // Ensure UI updates run on the UI thread
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        DownloadProgressBar.Value = progressInfo.ProgressPercentage ?? 0; // Assuming DownloadProgressBar exists
+
+                        if (progressInfo.Status == DownloadStatus.Downloading)
+                        {
+                            ProgressTextBlock.Text = $"Downloaded: {progressInfo.DownloadedSegments}/{progressInfo.TotalSegments} ({progressInfo.ProgressPercentage:F1}%)";
+                            ProgressTextBlock.Visibility = Visibility.Visible;
+                        }
+                        else
+                        {
+                            ProgressTextBlock.Text = string.Empty;
+                            ProgressTextBlock.Visibility = Visibility.Collapsed;
+                        }
+
+                        StatusTextBlock.Text = progressInfo.Status.ToString();
+                    });
+                });
+
+                // --- Update UI State ---
+                SetDownloadState(true);
+
+                // --- Update download settings from UI
+                _downloadService.Settings = new DownloadSettings
+                {
+                    MaxConcurrentDownloads = (int)MaxConcurrentDownloadsBox.Value,
+                    MaxRetries = (int)MaxRetriesBox.Value,
+                    RetryDelayMs = (int)RetryDelayBox.Value
+                };
+
+                // --- Start Download ---
+                try
+                {
+                    _logger.LogInformation("Starting download for playlist: {PlaylistUrl}, Output: {OutputFile}",
+                        selectedItem.Playlist.BaseUrl ?? "N/A", Path.Combine(outputPath, outputFileName + ".mp4"));
+
+                    // *** Important: Decide how to handle master vs media playlist selection ***
+                    // For now, we pass the Playlist object directly. DownloadVideoAsync currently expects
+                    // a playlist containing actual segments. If selectedItem.Playlist is a master playlist,
+                    // we might need an intermediate step to fetch the specific media playlist based on
+                    // selected quality (or 'Auto').
+                    // Let's assume for now selectedItem.Playlist IS the media playlist to download.
+                    // If QualityComboBox can select variants from a master list, this needs adjustment here
+                    // or within DownloadVideoAsync.
+
+                    M3U8Playlist playlistToDownload = selectedItem.Playlist;
+
+                    // If it's a master playlist and a specific quality (or Auto) was chosen,
+                    // we need to fetch that specific M3U8 first. This requires more logic.
+                    // Simplified Approach: If it's a master, maybe just try downloading the *first* quality variant?
+                    // This isn't ideal but avoids adding another fetch step right now.
+                    if (playlistToDownload.IsMasterPlaylist)
+                    {
+                        _logger.LogWarning("Selected item is a master playlist. Attempting to download the first quality variant. Refine this logic for specific quality selection.");
+                        var targetQualityUrl = selectedItem.GetTargetM3u8Url(); // Use the existing helper logic
+                        if (!string.IsNullOrEmpty(targetQualityUrl))
+                        {
+                             // We'd ideally fetch and parse targetQualityUrl here into a new M3U8Playlist object
+                             // and pass *that* to DownloadVideoAsync.
+                             // WORKAROUND: Let's just log a warning and proceed, hoping DownloadVideoAsync handles it gracefully (it likely won't yet).
+                             UpdateStatus($"Selected playlist is a master playlist. Downloading the 'best' variant ({targetQualityUrl}). This might not work as expected yet.", true);
+                             // Ideally: playlistToDownload = await FetchAndParseMediaPlaylist(targetQualityUrl);
+                        }
+                        else
+                        {
+                             UpdateStatus("Could not determine a specific media playlist URL from the selected master playlist.", true);
+                             SetDownloadState(false);
+                             return;
+                        }
+                         // For now, we still pass the master playlist, which is incorrect for DownloadVideoAsync
+                         // TODO: Fix this by fetching the media playlist before calling DownloadVideoAsync
+                    }
+
+
+                    await _downloadService.DownloadVideoAsync(playlistToDownload, outputPath, outputFileName, progressHandler, cancellationToken);
+
+                    // Success
+                     DispatcherQueue.TryEnqueue(() =>
+                     {
+                        UpdateStatus($"Download complete: {outputFileName}.mp4", false);
+                        DownloadProgressBar.Value = 100;
+                     });
+                }
+                catch (OperationCanceledException)
+                {
+                    DispatcherQueue.TryEnqueue(() => UpdateStatus("Download cancelled.", false));
+                    _logger.LogInformation("Download cancelled by user.");
+                }
+                 catch (FileNotFoundException fnfEx) // Specific case for FFmpeg not found
+                {
+                    DispatcherQueue.TryEnqueue(() => UpdateStatus($"Error: {fnfEx.Message}", true));
+                    _logger.LogError(fnfEx, "FFmpeg not found during download.");
+                }
+                catch (Exception ex)
+                {
+                    DispatcherQueue.TryEnqueue(() => UpdateStatus($"Download failed: {ex.Message}", true));
+                    _logger.LogError(ex, "An error occurred during download.");
+                }
+                finally
+                {
+                     DispatcherQueue.TryEnqueue(() => SetDownloadState(false));
+                    _downloadCts?.Dispose();
+                    _downloadCts = null;
+                    UpdateDownloadButtonState(); // Re-check button state after download finishes/fails/cancels
+                }
             }
             catch (Exception ex)
             {
-                DispatcherQueue.TryEnqueue(() => UpdateStatus($"Download failed: {ex.Message}", true));
-                _logger.LogError(ex, "An error occurred during download.");
-            }
-            finally
-            {
-                 DispatcherQueue.TryEnqueue(() => SetDownloadState(false));
-                _downloadCts?.Dispose();
-                _downloadCts = null;
-                UpdateDownloadButtonState(); // Re-check button state after download finishes/fails/cancels
+                 // Catch unexpected errors in the button handler itself
+                _logger.LogError(ex, "Critical error in DownloadButton_Click handler.");
+                UpdateStatus($"Critical error: {ex.Message}", true);
+                // Ensure UI is reset if something went wrong before SetDownloadState
+                if (_downloadCts != null)
+                {
+                     DispatcherQueue.TryEnqueue(() => SetDownloadState(false));
+                    _downloadCts?.Dispose();
+                    _downloadCts = null;
+                     UpdateDownloadButtonState();
+                }
             }
         }
 
@@ -339,6 +429,7 @@ namespace VideoDownloader.WinUI.Views
 
         private void UpdateStatus(string message, bool isError)
         {
+            _logger.LogInformation("Status update - Message: {Message}, IsError: {IsError}", message, isError);
             StatusTextBlock.Text = message;
             StatusTextBlock.Foreground = new SolidColorBrush(isError ? Microsoft.UI.Colors.Red : Microsoft.UI.Colors.Green); // Use Green for success/final status
              if (!isError && message.StartsWith("Download complete")) {
@@ -351,29 +442,26 @@ namespace VideoDownloader.WinUI.Views
         // Event handler for ComboBox selection changes and TextBox text changes
         private void Input_Changed(object sender, object e) // Use 'object e' to handle both SelectionChangedEventArgs and TextChangedEventArgs
         {
+            _logger.LogTrace("Input changed: {Sender}", sender?.GetType().Name ?? "unknown");
             UpdateDownloadButtonState();
         }
 
         // Checks inputs and enables/disables the Download button
         private void UpdateDownloadButtonState()
         {
-            bool isQualitySelected = QualityComboBox.SelectedItem != null;
-            string outputPath = OutputPathTextBox.Text?.Trim() ?? string.Empty;
-            string outputFileName = OutputFileNameTextBox.Text?.Trim() ?? string.Empty;
+            var hasUrl = !string.IsNullOrWhiteSpace(UrlTextBox.Text);
+            var hasQuality = QualityComboBox.SelectedItem != null;
+            var hasPath = !string.IsNullOrWhiteSpace(OutputPathTextBox.Text);
+            var hasFilename = !string.IsNullOrWhiteSpace(OutputFileNameTextBox.Text);
 
-            // Path is validated by the picker, just check if it's selected
-            bool isOutputPathValid = !string.IsNullOrWhiteSpace(outputPath);
-            bool isFileNameValid = !string.IsNullOrWhiteSpace(outputFileName) && outputFileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+            _logger.LogTrace("Updating download button state - HasUrl: {HasUrl}, HasQuality: {HasQuality}, HasPath: {HasPath}, HasFilename: {HasFilename}",
+                hasUrl, hasQuality, hasPath, hasFilename);
 
-            // Enable button only if all conditions are met AND not currently downloading
-            bool shouldBeEnabled = isQualitySelected && isOutputPathValid && isFileNameValid && DownloadButton.IsEnabled; // Check current state to avoid enabling during download
+            // Enable Download button only if all required fields are filled
+            DownloadButton.IsEnabled = 
+                hasUrl && hasQuality && hasPath && hasFilename;
 
-            // Only update if the state needs changing and we are NOT in a download state
-            // (SetDownloadState handles enabling/disabling during download)
-             if (CancelButton.Visibility != Visibility.Visible) // Check if NOT downloading via Cancel button visibility
-             {
-                DownloadButton.IsEnabled = isQualitySelected && isOutputPathValid && isFileNameValid;
-             }
+            _logger.LogTrace("Download button enabled: {IsEnabled}", DownloadButton.IsEnabled);
         }
 
         // Handles Browse button click to open Folder Picker
