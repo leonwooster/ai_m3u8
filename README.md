@@ -10,13 +10,18 @@ A modern Windows desktop application for downloading HLS/m3u8 video streams, bui
 - Progress tracking and notifications
 - Download history and resume support
 - Proxy and authentication support
+- XML-based configuration for persistent settings
+- Customizable download parameters:
+  - Maximum concurrent downloads
+  - Retry attempts
+  - Retry delay intervals
 
 ## Development Setup
 
 ### Prerequisites
 
 - Visual Studio 2022 or later
-- .NET 7.0 SDK or later
+- .NET 9.0 SDK
 - Windows App SDK
 - Git
 
@@ -29,11 +34,19 @@ A modern Windows desktop application for downloading HLS/m3u8 video streams, bui
 
 ## Project Structure
 
-- `VideoDownloader.Core` - Core download engine and business logic
-- `VideoDownloader.Services` - Application services and interfaces
-- `VideoDownloader.Infrastructure` - Platform integration and implementations
-- `VideoDownloader.UI` - WinUI 3 desktop application
+- `VideoDownloader.Core` - Core download engine, business logic, and configuration services
+- `VideoDownloader.WinUI` - WinUI 3 desktop application
 - `VideoDownloader.Tests` - Unit and integration tests
+
+## Configuration
+
+The application uses XML-based configuration to persist user settings. The configuration file (`config.xml`) is automatically created in the application's directory on first run with default values:
+
+- MaxConcurrentDownloads: 10
+- MaxRetries: 5
+- RetryDelayMs: 2500
+
+Settings are automatically saved whenever they are changed through the UI.
 
 ## License
 

@@ -77,13 +77,13 @@
                     </Grid.ColumnDefinitions>
                     
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Max Concurrent Downloads:" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <NumberBox Grid.Row="0" Grid.Column="1" x:Name="MaxConcurrentDownloadsBox" Value="3" Minimum="1" Maximum="16" SpinButtonPlacementMode="Inline" SmallChange="1"/>
+                    <NumberBox Grid.Row="0" Grid.Column="1" x:Name="MaxConcurrentDownloadsBox" Minimum="1" Maximum="16" SpinButtonPlacementMode="Inline" SmallChange="1" ValueChanged="MaxConcurrentDownloadsBox_ValueChanged"/>
                     
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Max Retries:" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <NumberBox Grid.Row="1" Grid.Column="1" x:Name="MaxRetriesBox" Value="3" Minimum="0" Maximum="10" SpinButtonPlacementMode="Inline" SmallChange="1"/>
+                    <NumberBox Grid.Row="1" Grid.Column="1" x:Name="MaxRetriesBox" Minimum="0" Maximum="10" SpinButtonPlacementMode="Inline" SmallChange="1" ValueChanged="MaxRetriesBox_ValueChanged"/>
                     
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Retry Delay (ms):" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <NumberBox Grid.Row="2" Grid.Column="1" x:Name="RetryDelayBox" Value="2000" Minimum="500" Maximum="10000" SpinButtonPlacementMode="Inline" SmallChange="500"/>
+                    <NumberBox Grid.Row="2" Grid.Column="1" x:Name="RetryDelayBox" Minimum="500" Maximum="10000" SpinButtonPlacementMode="Inline" SmallChange="500" ValueChanged="RetryDelayBox_ValueChanged"/>
                 </Grid>
             </Expander>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">

@@ -382,7 +382,7 @@ namespace VideoDownloader.Core.Services
                 throw new InvalidOperationException("Playlist contains no segments");
             }
 
-            string tempDirectory = Path.Combine(Path.GetTempPath(), $"m3u8dl_{Guid.NewGuid()}");
+            string tempDirectory = Path.Combine(outputDirectory, $"temp_{Guid.NewGuid()}");
             string finalOutputPath = Path.Combine(outputDirectory, outputFileName + ".mp4"); // Assuming MP4 for now
 
             _logger.LogInformation("Starting download for playlist based at {BaseUrl}. Output: {OutputPath}", playlist.BaseUrl, finalOutputPath);

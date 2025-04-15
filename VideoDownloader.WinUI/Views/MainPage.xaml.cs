@@ -10,15 +10,14 @@ using System.Linq;
 using System.Net.Http; // For HttpRequestException
 using System.Runtime.InteropServices; // For window handle
 using System.Threading.Tasks;
-using VideoDownloader.Core.Models;
 using VideoDownloader.Core.Services;
+using VideoDownloader.Core.Models;
 using System.Threading; // For CancellationTokenSource
 using System.IO; // For Directory, Path, File
 using Windows.Storage;
 using Windows.Storage.Pickers; // For FolderPicker
 using WinRT.Interop; // For InitializeWithWindow
 using System.Diagnostics; // For Debug.WriteLine
-using VideoDownloader.Core.Models;
 
 namespace VideoDownloader.WinUI.Views
 {
@@ -29,6 +28,7 @@ namespace VideoDownloader.WinUI.Views
     {
         private readonly DownloadService _downloadService;
         private readonly ILogger<MainPage> _logger;
+        private readonly ConfigurationService _configService;
 
         // Store the analysis results
         private List<M3U8Playlist> _foundPlaylists = new();
@@ -46,15 +46,19 @@ namespace VideoDownloader.WinUI.Views
                 ?? throw new InvalidOperationException("Failed to resolve DownloadService");
             _logger = (Application.Current as App)?.Services.GetService<ILogger<MainPage>>()
                 ?? throw new InvalidOperationException("Failed to resolve ILogger<MainPage>");
+            _configService = (Application.Current as App)?.Services.GetService<ConfigurationService>()
+                ?? throw new InvalidOperationException("Failed to resolve ConfigurationService");
 
-            // Initialize download settings UI with defaults
-            var defaultSettings = _downloadService.Settings;
-            MaxConcurrentDownloadsBox.Value = defaultSettings.MaxConcurrentDownloads;
-            MaxRetriesBox.Value = defaultSettings.MaxRetries;
-            RetryDelayBox.Value = defaultSettings.RetryDelayMs;
+            // Load settings from config file
+            var settings = _configService.LoadConfiguration();
+            _downloadService.Settings = settings;
+
+            // Initialize download settings UI with loaded settings
+            MaxConcurrentDownloadsBox.Value = settings.MaxConcurrentDownloads;
+            MaxRetriesBox.Value = settings.MaxRetries;
+            RetryDelayBox.Value = settings.RetryDelayMs;
 
             // Set default values
-            UrlTextBox.Text = "https://cdn3.turboviplay.com/data2/czguC33CoaeM2cXkT8ty/czguC33CoaeM2cXkT8ty.m3u8";
             OutputPathTextBox.Text = @"D:\Temp";
             OutputFileNameTextBox.Text = "a.mp4";
 
@@ -84,8 +88,8 @@ namespace VideoDownloader.WinUI.Views
             string url = UrlTextBox.Text?.Trim();
             if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out _))
             {
-                StatusTextBlock.Text = "Please enter a valid URL.";
-                StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+                StatusText.Text = "Please enter a valid URL.";
+                StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
                 QualityComboBox.ItemsSource = null;
                 QualityComboBox.IsEnabled = false;
                 return;
@@ -93,8 +97,8 @@ namespace VideoDownloader.WinUI.Views
 
             // Update UI for analysis state
             SetAnalysisState(true);
-            StatusTextBlock.Text = "Analyzing URL...";
-            StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray); // Default color
+            StatusText.Text = "Analyzing URL...";
+            StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray); // Default color
             QualityComboBox.ItemsSource = null;
             QualityComboBox.IsEnabled = false;
             _foundPlaylists.Clear();
@@ -105,32 +109,32 @@ namespace VideoDownloader.WinUI.Views
 
                 if (!_foundPlaylists.Any())
                 {
-                    StatusTextBlock.Text = $"No M3U8 streams found at the provided URL.";
-                    StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
+                    StatusText.Text = $"No M3U8 streams found at the provided URL.";
+                    StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
                 }
                 else
                 {
-                    StatusTextBlock.Text = $"Found {_foundPlaylists.Count} playlist(s). Select a stream.";
+                    StatusText.Text = $"Found {_foundPlaylists.Count} playlist(s). Select a stream.";
                     PopulateQualityComboBox();
                     QualityComboBox.IsEnabled = true;
                 }
             }
             catch (ArgumentException argEx) // Specific exception from AnalyzeUrlAsync for invalid URL format
             {
-                 StatusTextBlock.Text = $"Error: {argEx.Message}";
-                 StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
+                 StatusText.Text = $"Error: {argEx.Message}";
+                 StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
                  _logger.LogError(argEx, "Invalid URL provided by user: {Url}", url);
             }
             catch (HttpRequestException httpEx)
             {
-                StatusTextBlock.Text = $"Error fetching URL: {httpEx.Message}";
-                 StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
+                StatusText.Text = $"Error fetching URL: {httpEx.Message}";
+                 StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
                 _logger.LogError(httpEx, "HTTP error during analysis of {Url}", url);
             }
             catch (Exception ex)
             {
-                StatusTextBlock.Text = $"An unexpected error occurred: {ex.Message}";
-                 StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
+                StatusText.Text = $"An unexpected error occurred: {ex.Message}";
+                 StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Red);
                 _logger.LogError(ex, "Unexpected error during analysis of {Url}", url);
             }
             finally
@@ -158,8 +162,8 @@ namespace VideoDownloader.WinUI.Views
                 }
                 else
                 {
-                     StatusTextBlock.Text = "Master playlist found, but it contains no quality variants.";
-                     StatusTextBlock.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
+                     StatusText.Text = "Master playlist found, but it contains no quality variants.";
+                     StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
                      return; // Keep ComboBox disabled
                 }
             }
@@ -261,18 +265,18 @@ namespace VideoDownloader.WinUI.Views
                     {
                         DownloadProgressBar.Value = progressInfo.ProgressPercentage ?? 0; // Assuming DownloadProgressBar exists
 
-                        if (progressInfo.Status == DownloadStatus.Downloading)
+                        if (progressInfo.CurrentAction == "Downloading")
                         {
-                            ProgressTextBlock.Text = $"Downloaded: {progressInfo.DownloadedSegments}/{progressInfo.TotalSegments} ({progressInfo.ProgressPercentage:F1}%)";
-                            ProgressTextBlock.Visibility = Visibility.Visible;
+                            ProgressText.Text = $"Downloaded: {progressInfo.DownloadedSegments}/{progressInfo.TotalSegments} ({progressInfo.ProgressPercentage:F1}%)";
+                            ProgressText.Visibility = Visibility.Visible;
                         }
                         else
                         {
-                            ProgressTextBlock.Text = string.Empty;
-                            ProgressTextBlock.Visibility = Visibility.Collapsed;
+                            ProgressText.Text = string.Empty;
+                            ProgressText.Visibility = Visibility.Collapsed;
                         }
 
-                        StatusTextBlock.Text = progressInfo.Status.ToString();
+                        StatusText.Text = progressInfo.CurrentAction;
                     });
                 });
 
@@ -407,36 +411,63 @@ namespace VideoDownloader.WinUI.Views
 
         private void SetDownloadState(bool isDownloading)
         {
-            // Assumes controls like DownloadButton, CancelButton, OutputPathTextBox, etc. exist
             DownloadButton.IsEnabled = !isDownloading;
             CancelButton.IsEnabled = isDownloading;
             CancelButton.Visibility = isDownloading ? Visibility.Visible : Visibility.Collapsed;
-
-            // Disable other controls during download
-            UrlTextBox.IsEnabled = !isDownloading;
-            AnalyzeButton.IsEnabled = !isDownloading;
-            QualityComboBox.IsEnabled = !isDownloading;
-            OutputPathTextBox.IsEnabled = !isDownloading;
-            OutputFileNameTextBox.IsEnabled = !isDownloading;
-
             DownloadProgressBar.Visibility = isDownloading ? Visibility.Visible : Visibility.Collapsed;
-            if (!isDownloading)
-            {
-                DownloadProgressBar.Value = 0; // Reset progress bar
-                UpdateDownloadButtonState(); // Re-evaluate after download completes or is cancelled
-            }
+            StatusText.Text = string.Empty;
+            ProgressText.Text = string.Empty;
         }
 
         private void UpdateStatus(string message, bool isError)
         {
             _logger.LogInformation("Status update - Message: {Message}, IsError: {IsError}", message, isError);
-            StatusTextBlock.Text = message;
-            StatusTextBlock.Foreground = new SolidColorBrush(isError ? Microsoft.UI.Colors.Red : Microsoft.UI.Colors.Green); // Use Green for success/final status
+            StatusText.Text = message;
+            StatusText.Foreground = new SolidColorBrush(isError ? Microsoft.UI.Colors.Red : Microsoft.UI.Colors.Green); // Use Green for success/final status
              if (!isError && message.StartsWith("Download complete")) {
                  // Keep it Green for completion
              } else if (!isError) {
-                  StatusTextBlock.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray); // Default/info color
+                  StatusText.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray); // Default/info color
              }
+        }
+
+        private void SaveSettings()
+        {
+            var settings = new DownloadSettings
+            {
+                MaxConcurrentDownloads = (int)MaxConcurrentDownloadsBox.Value,
+                MaxRetries = (int)MaxRetriesBox.Value,
+                RetryDelayMs = (int)RetryDelayBox.Value
+            };
+
+            _downloadService.Settings = settings;
+            _configService.SaveConfiguration(settings);
+            _logger.LogInformation("Settings saved: MaxConcurrent={MaxConcurrent}, MaxRetries={MaxRetries}, RetryDelay={RetryDelay}",
+                settings.MaxConcurrentDownloads, settings.MaxRetries, settings.RetryDelayMs);
+        }
+
+        private void MaxConcurrentDownloadsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+        {
+            if (sender.Value >= sender.Minimum && sender.Value <= sender.Maximum)
+            {
+                SaveSettings();
+            }
+        }
+
+        private void MaxRetriesBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+        {
+            if (sender.Value >= sender.Minimum && sender.Value <= sender.Maximum)
+            {
+                SaveSettings();
+            }
+        }
+
+        private void RetryDelayBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+        {
+            if (sender.Value >= sender.Minimum && sender.Value <= sender.Maximum)
+            {
+                SaveSettings();
+            }
         }
 
         // Event handler for ComboBox selection changes and TextBox text changes

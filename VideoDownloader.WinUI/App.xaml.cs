@@ -86,6 +86,7 @@ namespace VideoDownloader.WinUI
             // Add Core Services
             services.AddSingleton<M3U8Parser>(); 
             services.AddTransient<DownloadService>(); 
+            services.AddSingleton<ConfigurationService>();
 
             // Add ViewModels or Pages 
             services.AddTransient<MainPage>();
