@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Logging;
 using VideoDownloader.Core.Models;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace VideoDownloader.Core.Services;
 
@@ -220,17 +223,43 @@ public class M3U8Parser
         return attributes;
     }
 
+    // Make ResolveUrl public static for cross-class use
     public static string ResolveUrl(string url, string baseUrl)
     {
-        if (string.IsNullOrEmpty(url))
-            return string.Empty;
-
-        if (Uri.TryCreate(url, UriKind.Absolute, out _))
+        if (string.IsNullOrWhiteSpace(url))
             return url;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var absUri))
+            return absUri.ToString();
+        // baseUrl may be a file or folder; get folder
+        var baseUri = new Uri(baseUrl);
+        if (!baseUrl.EndsWith("/"))
+        {
+            // Remove filename if present
+            baseUri = new Uri(baseUri, ".");
+        }
+        var resolved = new Uri(baseUri, url);
+        return resolved.ToString();
+    }
 
-        if (string.IsNullOrEmpty(baseUrl))
-            return url;
-
-        return new Uri(new Uri(baseUrl), url).ToString();
+    /// <summary>
+    /// Downloads and parses the latest version of the given playlist (for live HLS updates).
+    /// </summary>
+    /// <param name="playlist">The original playlist to refresh.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Updated M3U8Playlist with new segments.</returns>
+    public async Task<M3U8Playlist> RefreshPlaylistAsync(M3U8Playlist playlist, CancellationToken cancellationToken)
+    {
+        if (playlist == null) throw new ArgumentNullException(nameof(playlist));
+        if (string.IsNullOrWhiteSpace(playlist.BaseUrl))
+            throw new ArgumentException("Playlist.BaseUrl is required for refreshing.");
+        var playlistUrl = playlist.BaseUrl;
+        using var httpClient = new HttpClient();
+        var response = await httpClient.GetAsync(playlistUrl, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var refreshed = Parse(content, playlist.BaseUrl);
+        // Preserve IsLiveStream property if set
+        refreshed.IsLiveStream = playlist.IsLiveStream;
+        return refreshed;
     }
 }

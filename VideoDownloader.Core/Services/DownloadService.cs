@@ -449,7 +449,7 @@ namespace VideoDownloader.Core.Services
                                         await Task.Delay(_settings.RetryDelayMs * retryCount, cancellationToken); // Exponential backoff
                                     }
 
-                                    using var response = await _httpClient.GetAsync(segmentUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                                    using var response = await _httpClient.GetAsync(segmentUrl, cancellationToken);
                                    
                                     // Special handling for Cloudflare errors
                                     if ((int)response.StatusCode == 520 || (int)response.StatusCode == 524)
@@ -700,6 +700,87 @@ namespace VideoDownloader.Core.Services
             {
                  process?.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Downloads a live HLS (m3u8) stream, polling for new segments until stopped.
+        /// </summary>
+        /// <param name="playlist">The parsed media playlist (must be live, not VOD).</param>
+        /// <param name="outputDirectory">Directory to save the output file.</param>
+        /// <param name="outputFileName">Output file name (TS or MP4).</param>
+        /// <param name="progress">Reports duration recorded and segment count.</param>
+        /// <param name="cancellationToken">Token for manual stop or timer.</param>
+        /// <param name="maxDurationSeconds">Optional: stop after X seconds (null for unlimited).</param>
+        public async Task DownloadLiveStreamAsync(
+            M3U8Playlist playlist,
+            string outputDirectory,
+            string outputFileName,
+            IProgress<DownloadProgressInfo> progress,
+            CancellationToken cancellationToken,
+            int? maxDurationSeconds = null)
+        {
+            if (playlist == null)
+                throw new ArgumentNullException(nameof(playlist));
+            if (!playlist.IsLiveStream)
+                throw new InvalidOperationException("Playlist is not a live stream.");
+            if (string.IsNullOrWhiteSpace(outputDirectory) || string.IsNullOrWhiteSpace(outputFileName))
+                throw new ArgumentException("Invalid output directory or filename.");
+
+            Directory.CreateDirectory(outputDirectory);
+            string outputPath = Path.Combine(outputDirectory, outputFileName);
+            using var outputStream = new FileStream(outputPath, FileMode.Append, FileAccess.Write, FileShare.Read);
+
+            var seenSegments = new HashSet<string>();
+            var sw = Stopwatch.StartNew();
+            TimeSpan? maxDuration = maxDurationSeconds.HasValue ? TimeSpan.FromSeconds(maxDurationSeconds.Value) : null;
+            var lastReportedDuration = TimeSpan.Zero;
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                // Fetch latest playlist
+                var refreshedPlaylist = await _m3u8Parser.RefreshPlaylistAsync(playlist, cancellationToken);
+                var newSegments = refreshedPlaylist.Segments.Where(s => seenSegments.Add(s.Url)).ToList();
+                foreach (var segment in newSegments)
+                {
+                    try
+                    {
+                        var segmentUri = segment.Url;
+                        using var segmentResp = await _httpClient.GetAsync(segmentUri, cancellationToken);
+                        segmentResp.EnsureSuccessStatusCode();
+                        var segmentBytes = await segmentResp.Content.ReadAsByteArrayAsync(cancellationToken);
+                        await outputStream.WriteAsync(segmentBytes, 0, segmentBytes.Length, cancellationToken);
+                        await outputStream.FlushAsync(cancellationToken);
+                        _logger.LogInformation($"Appended segment: {segmentUri}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, $"Failed to download or write segment: {segment.Url}");
+                    }
+                }
+                // Report progress (duration = segment count * target duration or stopwatch)
+                var duration = TimeSpan.FromSeconds(seenSegments.Count * (playlist.TargetDuration > 0 ? playlist.TargetDuration : 6));
+                if (duration - lastReportedDuration > TimeSpan.FromSeconds(1))
+                {
+                    progress?.Report(new DownloadProgressInfo
+                    {
+                        TotalSegments = seenSegments.Count,
+                        DownloadedSegments = seenSegments.Count,
+                        CurrentAction = $"Recording live stream: {duration:hh\\:mm\\:ss}"
+                        // ProgressPercentage intentionally omitted for live
+                    });
+                    lastReportedDuration = duration;
+                }
+                // Stop if max duration reached
+                if (maxDuration.HasValue && sw.Elapsed >= maxDuration.Value)
+                    break;
+                // Wait before polling again
+                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+            }
+            sw.Stop();
+            await outputStream.FlushAsync(cancellationToken);
+            _logger.LogInformation($"Live recording stopped. Total segments: {seenSegments.Count}");
+            // Optionally: Remux to MP4 using FFmpeg if output is TS
+            // (not implemented here)
         }
 
        private static string GetBaseUrl(Uri? uri)

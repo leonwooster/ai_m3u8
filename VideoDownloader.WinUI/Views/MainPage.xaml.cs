@@ -258,113 +258,55 @@ namespace VideoDownloader.WinUI.Views
                 _downloadCts = new CancellationTokenSource();
                 var cancellationToken = _downloadCts.Token;
 
-                var progressHandler = new Progress<DownloadService.DownloadProgressInfo>(progressInfo =>
-                {
-                    // Ensure UI updates run on the UI thread
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        DownloadProgressBar.Value = progressInfo.ProgressPercentage ?? 0; // Assuming DownloadProgressBar exists
-
-                        if (progressInfo.CurrentAction == "Downloading")
-                        {
-                            ProgressText.Text = $"Downloaded: {progressInfo.DownloadedSegments}/{progressInfo.TotalSegments} ({progressInfo.ProgressPercentage:F1}%)";
-                            ProgressText.Visibility = Visibility.Visible;
-                        }
-                        else
-                        {
-                            ProgressText.Text = string.Empty;
-                            ProgressText.Visibility = Visibility.Collapsed;
-                        }
-
-                        StatusText.Text = progressInfo.CurrentAction;
-                    });
-                });
-
-                // --- Update UI State ---
+                // --- Live Stream Integration ---
+                bool isLive = LiveStreamCheckBox?.IsChecked == true;
+                UpdateStatus(isLive ? "Recording live stream..." : "Starting download...", false);
                 SetDownloadState(true);
 
-                // --- Update download settings from UI
-                _downloadService.Settings = new DownloadSettings
-                {
-                    MaxConcurrentDownloads = (int)MaxConcurrentDownloadsBox.Value,
-                    MaxRetries = (int)MaxRetriesBox.Value,
-                    RetryDelayMs = (int)RetryDelayBox.Value
-                };
-
-                // --- Start Download ---
                 try
                 {
-                    _logger.LogInformation("Starting download for playlist: {PlaylistUrl}, Output: {OutputFile}",
-                        selectedItem.Playlist.BaseUrl ?? "N/A", Path.Combine(outputPath, outputFileName + ".mp4"));
-
-                    // *** Important: Decide how to handle master vs media playlist selection ***
-                    // For now, we pass the Playlist object directly. DownloadVideoAsync currently expects
-                    // a playlist containing actual segments. If selectedItem.Playlist is a master playlist,
-                    // we might need an intermediate step to fetch the specific media playlist based on
-                    // selected quality (or 'Auto').
-                    // Let's assume for now selectedItem.Playlist IS the media playlist to download.
-                    // If QualityComboBox can select variants from a master list, this needs adjustment here
-                    // or within DownloadVideoAsync.
-
-                    M3U8Playlist playlistToDownload = selectedItem.Playlist;
-
-                    // If it's a master playlist and a specific quality (or Auto) was chosen,
-                    // we need to fetch that specific M3U8 first. This requires more logic.
-                    // Simplified Approach: If it's a master, maybe just try downloading the *first* quality variant?
-                    // This isn't ideal but avoids adding another fetch step right now.
-                    if (playlistToDownload.IsMasterPlaylist)
+                    if (isLive)
                     {
-                        _logger.LogWarning("Selected item is a master playlist. Attempting to download the first quality variant. Refine this logic for specific quality selection.");
-                        var targetQualityUrl = selectedItem.GetTargetM3u8Url(); // Use the existing helper logic
-                        if (!string.IsNullOrEmpty(targetQualityUrl))
-                        {
-                             // We'd ideally fetch and parse targetQualityUrl here into a new M3U8Playlist object
-                             // and pass *that* to DownloadVideoAsync.
-                             // WORKAROUND: Let's just log a warning and proceed, hoping DownloadVideoAsync handles it gracefully (it likely won't yet).
-                             UpdateStatus($"Selected playlist is a master playlist. Downloading the 'best' variant ({targetQualityUrl}). This might not work as expected yet.", true);
-                             // Ideally: playlistToDownload = await FetchAndParseMediaPlaylist(targetQualityUrl);
-                        }
-                        else
-                        {
-                             UpdateStatus("Could not determine a specific media playlist URL from the selected master playlist.", true);
-                             SetDownloadState(false);
-                             return;
-                        }
-                         // For now, we still pass the master playlist, which is incorrect for DownloadVideoAsync
-                         // TODO: Fix this by fetching the media playlist before calling DownloadVideoAsync
+                        await _downloadService.DownloadLiveStreamAsync(
+                            selectedItem.Playlist,
+                            outputPath,
+                            outputFileName + ".ts",
+                            new Progress<DownloadService.DownloadProgressInfo>(info =>
+                            {
+                                ProgressText.Text = $"Segments: {info.DownloadedSegments}, {info.CurrentAction}";
+                            }),
+                            cancellationToken,
+                            maxDurationSeconds: 0 // 0 = unlimited, or let user set
+                        );
+                        UpdateStatus("Live recording complete!", false);
                     }
-
-
-                    await _downloadService.DownloadVideoAsync(playlistToDownload, outputPath, outputFileName, progressHandler, cancellationToken);
-
-                    // Success
-                     DispatcherQueue.TryEnqueue(() =>
-                     {
-                        UpdateStatus($"Download complete: {outputFileName}.mp4", false);
-                        DownloadProgressBar.Value = 100;
-                     });
+                    else
+                    {
+                        await _downloadService.DownloadVideoAsync(
+                            selectedItem.Playlist,
+                            outputPath,
+                            outputFileName + ".mp4",
+                            new Progress<DownloadService.DownloadProgressInfo>(info =>
+                            {
+                                ProgressText.Text = $"Progress: {info.ProgressPercentage:F2}%";
+                            }),
+                            cancellationToken
+                        );
+                        UpdateStatus("Download complete!", false);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
-                    DispatcherQueue.TryEnqueue(() => UpdateStatus("Download cancelled.", false));
-                    _logger.LogInformation("Download cancelled by user.");
-                }
-                 catch (FileNotFoundException fnfEx) // Specific case for FFmpeg not found
-                {
-                    DispatcherQueue.TryEnqueue(() => UpdateStatus($"Error: {fnfEx.Message}", true));
-                    _logger.LogError(fnfEx, "FFmpeg not found during download.");
+                    UpdateStatus("Download canceled.", true);
                 }
                 catch (Exception ex)
                 {
-                    DispatcherQueue.TryEnqueue(() => UpdateStatus($"Download failed: {ex.Message}", true));
-                    _logger.LogError(ex, "An error occurred during download.");
+                    UpdateStatus($"Error: {ex.Message}", true);
+                    _logger.LogError(ex, "Download failed");
                 }
                 finally
                 {
-                     DispatcherQueue.TryEnqueue(() => SetDownloadState(false));
-                    _downloadCts?.Dispose();
-                    _downloadCts = null;
-                    UpdateDownloadButtonState(); // Re-check button state after download finishes/fails/cancels
+                    SetDownloadState(false);
                 }
             }
             catch (Exception ex)
@@ -558,28 +500,27 @@ namespace VideoDownloader.WinUI.Views
              // Add other properties as needed, e.g., the actual M3U8 URL to download
             public string? GetTargetM3u8Url()
             {
-                if (IsAuto) {
+                if (IsAuto)
+                {
                     // Return highest quality URL from the associated playlist
                     return Playlist?.Qualities?.OrderByDescending(q => q.Bandwidth)?.FirstOrDefault()?.Url;
                 }
-                if (Quality != null) {
-                     return Quality.Url; // URL of the specific quality variant
+                if (Quality != null)
+                {
+                    return Quality.Url; // Absolute URL of the specific quality variant
                 }
-                 if (IsDirectPlaylistSelection) {
-                     // If it's a master playlist, maybe return the highest quality? Or the master URL itself?
-                     // If it's a media playlist, return its BaseUrl or a derived URL.
-                     // This needs refinement based on how we handle multi-playlist results.
-                     if (Playlist?.IsMasterPlaylist ?? false) {
-                        // For now, return highest quality of the selected master playlist
-                         return Playlist?.Qualities?.OrderByDescending(q => q.Bandwidth)?.FirstOrDefault()?.Url;
-                     } else {
-                        // If it's a direct media playlist, need its actual URL.
-                        // The BaseUrl in M3U8Playlist might be the *folder* URL.
-                        // We might need to store the original URL that led to this playlist.
-                        // Let's assume for now the 'BaseUrl' stored might be the direct playlist URL if it was directly linked.
-                        // TODO: Refine this logic - maybe store original found URL in ComboBoxItemViewModel?
-                         return Playlist?.BaseUrl;
-                     }
+                if (IsDirectPlaylistSelection)
+                {
+                    // If it's a master playlist, return highest quality variant URL
+                    if (Playlist?.IsMasterPlaylist == true)
+                    {
+                        return Playlist.Qualities?.OrderByDescending(q => q.Bandwidth)?.FirstOrDefault()?.Url;
+                    }
+                    // If it's a media playlist, return its BaseUrl (should be absolute)
+                    if (Playlist?.IsMasterPlaylist == false)
+                    {
+                        return Playlist?.BaseUrl;
+                    }
                 }
                 return null;
             }
