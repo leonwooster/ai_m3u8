@@ -273,7 +273,9 @@ namespace VideoDownloader.WinUI.Views
                             outputFileName + ".ts",
                             new Progress<DownloadService.DownloadProgressInfo>(info =>
                             {
-                                ProgressText.Text = $"Segments: {info.DownloadedSegments}, {info.CurrentAction}";
+                                ProgressText.Text = $"Segments: {info.DownloadedSegments} of {info.TotalSegments} ({info.CurrentAction})";
+                                DownloadProgressBar.Visibility = Visibility.Visible;
+                                DownloadProgressBar.Value = info.ProgressPercentage ?? 0;
                             }),
                             cancellationToken,
                             maxDurationSeconds: 0 // 0 = unlimited, or let user set
@@ -288,7 +290,9 @@ namespace VideoDownloader.WinUI.Views
                             outputFileName + ".mp4",
                             new Progress<DownloadService.DownloadProgressInfo>(info =>
                             {
-                                ProgressText.Text = $"Progress: {info.ProgressPercentage:F2}%";
+                                ProgressText.Text = $"Downloaded {info.DownloadedSegments} of {info.TotalSegments} segments ({info.ProgressPercentage:F2}%)";
+                                DownloadProgressBar.Visibility = Visibility.Visible;
+                                DownloadProgressBar.Value = info.ProgressPercentage ?? 0;
                             }),
                             cancellationToken
                         );
@@ -307,6 +311,8 @@ namespace VideoDownloader.WinUI.Views
                 finally
                 {
                     SetDownloadState(false);
+                    DownloadProgressBar.Visibility = Visibility.Collapsed;
+                    DownloadProgressBar.Value = 0;
                 }
             }
             catch (Exception ex)
