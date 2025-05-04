@@ -43,6 +43,9 @@ namespace VideoDownloader.Core.Services
             set => _settings = value ?? new DownloadSettings();
         }
 
+        // Expose the parser for external use (needed for UI to parse variant playlists)
+        public M3U8Parser Parser => _m3u8Parser;
+
         /// <summary>
         /// Analyzes a given URL to find M3U8 playlists.
         /// Handles both direct M3U8 links and HTML pages containing them.
@@ -325,7 +328,7 @@ namespace VideoDownloader.Core.Services
             public double? ProgressPercentage => TotalSegments > 0 ? (double)DownloadedSegments / TotalSegments * 100 : 0;
         }
 
-        public async Task DownloadVideoAsync(M3U8Playlist playlist, string outputDirectory, string outputFileName, IProgress<DownloadProgressInfo> progress, CancellationToken cancellationToken)
+        public async Task DownloadVideoAsync(M3U8Playlist playlist, string outputDirectory, string outputFileName, IProgress<DownloadProgressInfo> progress, CancellationToken cancellationToken, bool deleteTemp = true)
         {
             if (playlist == null)
             {
@@ -576,7 +579,7 @@ namespace VideoDownloader.Core.Services
             finally
             {
                 // --- Cleanup ---
-                if (Directory.Exists(tempDirectory))
+                if (deleteTemp && Directory.Exists(tempDirectory))
                 {
                     _logger.LogDebug("Cleaning up temporary directory: {TempDir}", tempDirectory);
                     try

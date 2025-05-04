@@ -16,12 +16,14 @@
         <TextBox x:Name="UrlTextBox"
                  Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                  PlaceholderText="Enter M3U8 URL or page URL"
+                 ToolTipService.ToolTip="Enter the full URL of the M3U8 playlist or a web page containing the video."
                  Margin="0,0,0,10"/>
 
         <Button x:Name="AnalyzeButton"
                 Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
                 Content="Analyze"
                 Click="AnalyzeButton_Click"
+                ToolTipService.ToolTip="Analyze the URL to find available video streams and qualities."
                 HorizontalAlignment="Stretch"
                 Margin="0,0,0,10"/>
 
@@ -39,6 +41,7 @@
                   PlaceholderText="Select quality..."
                   IsEnabled="False"
                   SelectionChanged="Input_Changed"
+                  ToolTipService.ToolTip="Select the desired video quality/stream to download."
                   HorizontalAlignment="Stretch"
                   Margin="0,0,0,10"/>
         <!-- ItemsSource will be bound or set in code-behind -->
@@ -49,26 +52,36 @@
                  Grid.Row="5" Grid.Column="1"
                  PlaceholderText="Select output folder..."
                  IsReadOnly="True"
+                 ToolTipService.ToolTip="The folder where the downloaded video will be saved."
                  Margin="0,0,0,10" TextChanged="Input_Changed"/>
         <!-- Make it read-only -->
         <Button x:Name="BrowseButton"
                 Grid.Row="5" Grid.Column="2"
                 Content="Browse..."
                 Click="BrowseButton_Click"
+                ToolTipService.ToolTip="Browse for the output folder."
                 Margin="5,0,0,10"/>
         <TextBlock Grid.Row="6" Grid.Column="0" Text="Output File Name:" VerticalAlignment="Center" Margin="0,0,10,0"/>
         <TextBox x:Name="OutputFileNameTextBox"
                  Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2"
                  PlaceholderText="Enter output file name..."
+                 ToolTipService.ToolTip="Enter the desired name for the output video file (extension will be added automatically)."
                  Margin="0,0,0,10" TextChanged="Input_Changed"/>
-        <!-- Live Stream Option -->
-        <CheckBox x:Name="LiveStreamCheckBox"
-                  Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3"
-                  Content="Record as Live Stream (HLS)"
-                  Margin="0,10,0,0"
-                  Checked="Input_Changed" Unchecked="Input_Changed"/>
-        <StackPanel Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Margin="0,10,0,0">
-            <Expander Header="Download Settings" IsExpanded="False" Margin="0,0,0,10">
+        <!-- Live Stream Option / Delete Temp Option -->
+        <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Margin="0,10,0,0">
+            <CheckBox x:Name="LiveStreamCheckBox"
+                      Content="Record as Live Stream (HLS)"
+                      ToolTipService.ToolTip="Check this for live HLS streams to record them as they broadcast."
+                      Margin="0,0,0,5" 
+                      Checked="Input_Changed" Unchecked="Input_Changed"/>
+            <CheckBox x:Name="DeleteTempCheckBox" IsChecked="True" Margin="0,0,0,0" ToolTipService.ToolTip="Automatically delete the temporary segment files after successful merging."> 
+                <CheckBox.Content>
+                    <TextBlock Text="Delete temp folder after merging" TextWrapping="Wrap"/>
+                </CheckBox.Content>
+            </CheckBox>
+        </StackPanel>
+        <StackPanel Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Margin="0,5,0,0">
+            <Expander Header="Download Settings" IsExpanded="False" Margin="0,0,0,10" ToolTipService.ToolTip="Expand to configure advanced download settings.">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -81,13 +94,13 @@
                     </Grid.ColumnDefinitions>
                     
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Max Concurrent Downloads:" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <NumberBox Grid.Row="0" Grid.Column="1" x:Name="MaxConcurrentDownloadsBox" Minimum="1" Maximum="16" SpinButtonPlacementMode="Inline" SmallChange="1" ValueChanged="MaxConcurrentDownloadsBox_ValueChanged"/>
+                    <NumberBox Grid.Row="0" Grid.Column="1" x:Name="MaxConcurrentDownloadsBox" Minimum="1" Maximum="16" SpinButtonPlacementMode="Inline" SmallChange="1" ValueChanged="MaxConcurrentDownloadsBox_ValueChanged" ToolTipService.ToolTip="Number of video segments to download simultaneously."/>
                     
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Max Retries:" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <NumberBox Grid.Row="1" Grid.Column="1" x:Name="MaxRetriesBox" Minimum="0" Maximum="10" SpinButtonPlacementMode="Inline" SmallChange="1" ValueChanged="MaxRetriesBox_ValueChanged"/>
+                    <NumberBox Grid.Row="1" Grid.Column="1" x:Name="MaxRetriesBox" Minimum="0" Maximum="10" SpinButtonPlacementMode="Inline" SmallChange="1" ValueChanged="MaxRetriesBox_ValueChanged" ToolTipService.ToolTip="Maximum number of times to retry downloading a failed segment."/>
                     
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Retry Delay (ms):" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <NumberBox Grid.Row="2" Grid.Column="1" x:Name="RetryDelayBox" Minimum="500" Maximum="10000" SpinButtonPlacementMode="Inline" SmallChange="500" ValueChanged="RetryDelayBox_ValueChanged"/>
+                    <NumberBox Grid.Row="2" Grid.Column="1" x:Name="RetryDelayBox" Minimum="500" Maximum="10000" SpinButtonPlacementMode="Inline" SmallChange="500" ValueChanged="RetryDelayBox_ValueChanged" ToolTipService.ToolTip="Delay in milliseconds before retrying a failed segment."/>
                 </Grid>
             </Expander>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -95,12 +108,14 @@
                         Content="Download Selected"
                         IsEnabled="False"
                         Click="DownloadButton_Click"
+                        ToolTipService.ToolTip="Start downloading the selected video stream/quality."
                         Margin="0,0,10,0"/>
                 <Button x:Name="CancelButton"
                         Content="Cancel"
                         IsEnabled="False"
                         Visibility="Collapsed" 
                         Click="CancelButton_Click"
+                        ToolTipService.ToolTip="Cancel the ongoing download/recording."
                         Margin="0,0,10,0"/>
             </StackPanel>
         </StackPanel>

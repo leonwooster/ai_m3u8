@@ -85,8 +85,8 @@ namespace VideoDownloader.WinUI.Views
         private async void AnalyzeButton_Click(object sender, RoutedEventArgs e)
         {
             _logger.LogInformation("Starting URL analysis: {Url}", UrlTextBox.Text);
-            string url = UrlTextBox.Text?.Trim();
-            if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out _))
+            string? url = UrlTextBox.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url!, UriKind.Absolute, out _))
             {
                 StatusText.Text = "Please enter a valid URL.";
                 StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
@@ -105,7 +105,7 @@ namespace VideoDownloader.WinUI.Views
 
             try
             {
-                _foundPlaylists = await _downloadService.AnalyzeUrlAsync(url);
+                _foundPlaylists = await _downloadService.AnalyzeUrlAsync(url!);
 
                 if (!_foundPlaylists.Any())
                 {
@@ -154,46 +154,38 @@ namespace VideoDownloader.WinUI.Views
                 if (masterPlaylist.Qualities.Any())
                 {
                     // Add "Auto" option - select highest bandwidth
-                    comboBoxItems.Add(new ComboBoxItemViewModel { DisplayName = "Auto (Highest Quality)", IsAuto = true, Playlist = masterPlaylist });
+                    comboBoxItems.Add(new ComboBoxItemViewModel { DisplayName = $"Auto (Highest Quality) - {masterPlaylist.Qualities.OrderByDescending(q => q.Bandwidth).FirstOrDefault()?.Bandwidth / 1000} kbps", IsAuto = true, Playlist = masterPlaylist });
                     // Add specific qualities, sorted by bandwidth descending
                     comboBoxItems.AddRange(masterPlaylist.Qualities
                         .OrderByDescending(q => q.Bandwidth)
-                        .Select(q => new ComboBoxItemViewModel { DisplayName = q.DisplayName, Quality = q, Playlist = masterPlaylist }));
-                }
-                else
-                {
-                     StatusText.Text = "Master playlist found, but it contains no quality variants.";
-                     StatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
-                     return; // Keep ComboBox disabled
+                        .Select(q => new ComboBoxItemViewModel
+                        {
+                            DisplayName = $"{q.Resolution ?? "Unknown"} - {q.Bandwidth / 1000} kbps" + (q.Codecs != null ? $" ({q.Codecs})" : ""),
+                            Quality = q,
+                            Playlist = masterPlaylist
+                        }));
                 }
             }
-            else // Handle single media playlists or multiple playlists (master or media)
+            else if (_foundPlaylists.Count > 0)
             {
-                 // Simple case: Treat each found playlist as a selectable item
-                int index = 1;
+                // Not a master playlist, show each as a direct option
                 foreach (var playlist in _foundPlaylists)
                 {
-                     // Create a sensible name
-                    string name = $"Playlist {index++}";
-                    if (playlist.IsMasterPlaylist && playlist.Qualities.Any()) {
-                        name += $" (Master - {playlist.Qualities.Count} variants)";
-                    } else if (!playlist.IsMasterPlaylist && playlist.Segments.Any()) {
-                        name += $" (Media - {playlist.Segments.Count} segments)";
-                        // Optionally show resolution/bitrate if easily derivable from the first segment or metadata
-                    } else {
-                         name += $" ({playlist.BaseUrl})"; // Fallback
+                    string name = "Direct Playlist";
+                    if (playlist.BaseUrl != null)
+                    {
+                        name += $" ({playlist.BaseUrl})";
                     }
-
-                     comboBoxItems.Add(new ComboBoxItemViewModel { DisplayName = name, Playlist = playlist, IsDirectPlaylistSelection = true });
+                    comboBoxItems.Add(new ComboBoxItemViewModel { DisplayName = name, Playlist = playlist, IsDirectPlaylistSelection = true });
                 }
             }
 
             QualityComboBox.ItemsSource = comboBoxItems;
-            QualityComboBox.DisplayMemberPath = "DisplayName"; // Tell ComboBox to display this property
+            QualityComboBox.DisplayMemberPath = "DisplayName";
             if (comboBoxItems.Any())
             {
-                QualityComboBox.SelectedIndex = 0; // Default to Auto or the first found playlist
-                UpdateDownloadButtonState(); // Check initial state
+                QualityComboBox.SelectedIndex = 0;
+                UpdateDownloadButtonState();
                 QualityComboBox.IsEnabled = true;
             }
         }
@@ -206,8 +198,8 @@ namespace VideoDownloader.WinUI.Views
             try
             {
                 var selectedItem = QualityComboBox.SelectedItem as ComboBoxItemViewModel;
-                string outputPath = OutputPathTextBox.Text?.Trim(); // Assuming OutputPathTextBox exists
-                string outputFileName = OutputFileNameTextBox.Text?.Trim(); // Assuming OutputFileNameTextBox exists
+                string? outputPath = OutputPathTextBox.Text?.Trim();
+                string? outputFileName = OutputFileNameTextBox.Text?.Trim();
 
                 _logger.LogInformation("Selected Item: {Item}, Output Path: {Path}, Output Filename: {Filename}", 
                                         selectedItem?.DisplayName ?? "null", 
@@ -215,7 +207,7 @@ namespace VideoDownloader.WinUI.Views
                                         outputFileName ?? "null");
 
                 // --- Input Validation ---
-                if (selectedItem?.Playlist == null)
+                if (selectedItem == null)
                 {
                     _logger.LogWarning("Download aborted: No quality selected.");
                     UpdateStatus("Please select a quality/stream first.", true);
@@ -258,6 +250,9 @@ namespace VideoDownloader.WinUI.Views
                 _downloadCts = new CancellationTokenSource();
                 var cancellationToken = _downloadCts.Token;
 
+                // Get temp folder deletion preference
+                bool deleteTemp = DeleteTempCheckBox?.IsChecked != false; // default true
+
                 // --- Live Stream Integration ---
                 bool isLive = LiveStreamCheckBox?.IsChecked == true;
                 UpdateStatus(isLive ? "Recording live stream..." : "Starting download...", false);
@@ -265,10 +260,66 @@ namespace VideoDownloader.WinUI.Views
 
                 try
                 {
+                    M3U8Playlist? playlistToDownload = null;
+
+                    // Always resolve to a media playlist for the selected quality
+                    string? m3u8Url = selectedItem.GetTargetM3u8Url();
+                    _logger.LogInformation("[DIAG] Will fetch playlist for download: {Url}", m3u8Url);
+                    if (!string.IsNullOrWhiteSpace(m3u8Url))
+                    {
+                        using var httpClient = new HttpClient();
+                        var response = await httpClient.GetAsync(m3u8Url, cancellationToken);
+                        response.EnsureSuccessStatusCode();
+                        string content = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                        // Log first 10 lines of the playlist content for diagnostics
+                        var playlistLines = content.Split('\n').Take(10);
+                        _logger.LogInformation("[DIAG] First 10 lines of playlist {Url}:\n{Lines}", m3u8Url, string.Join("\n", playlistLines));
+
+                        // Check if this is a master playlist (should not be!)
+                        if (content.Contains("#EXT-X-STREAM-INF"))
+                        {
+                            StatusText.Text = "Error: Fetched playlist is a master playlist. Select a specific quality.";
+                            _logger.LogError("[DIAG] Fetched playlist is a master playlist! URL: {Url}", m3u8Url);
+                            return;
+                        }
+                        if (!content.Contains("#EXTINF"))
+                        {
+                            StatusText.Text = "Error: Fetched playlist does not contain segments (#EXTINF missing).";
+                            _logger.LogError("[DIAG] Fetched playlist does not contain #EXTINF. URL: {Url}", m3u8Url);
+                            return;
+                        }
+
+                        playlistToDownload = _downloadService.Parser.Parse(content, m3u8Url);
+
+                        // --- DIAGNOSTIC LOGGING/UI ---
+                        var segCount = playlistToDownload.Segments.Count;
+                        var segInfo = segCount > 0 ? $"First: {playlistToDownload.Segments.First().Url} ({playlistToDownload.Segments.First().Duration}s), Last: {playlistToDownload.Segments.Last().Url} ({playlistToDownload.Segments.Last().Duration}s)" : "No segments";
+                        var playlistType = content.Contains("#EXT-X-PLAYLIST-TYPE:") ? content.Split('\n').FirstOrDefault(l => l.Contains("#EXT-X-PLAYLIST-TYPE:")) : "Unknown";
+                        var hasEndlist = content.Contains("#EXT-X-ENDLIST") ? "Yes" : "No";
+                        StatusText.Text = $"URL: {m3u8Url}\nSegments: {segCount}\nType: {playlistType}\n#EXT-X-ENDLIST: {hasEndlist}\n{segInfo}";
+                        _logger.LogInformation("[DIAG] Variant URL: {Url}\nSegments: {SegCount}\nType: {Type}\n#EXT-X-ENDLIST: {Endlist}\n{SegInfo}", m3u8Url, segCount, playlistType, hasEndlist, segInfo);
+                    }
+                    else if (selectedItem.Playlist != null && !selectedItem.Playlist.IsMasterPlaylist)
+                    {
+                        // If it's already a media playlist, use it directly
+                        playlistToDownload = selectedItem.Playlist;
+                        var segCount = playlistToDownload.Segments.Count;
+                        var segInfo = segCount > 0 ? $"First: {playlistToDownload.Segments.First().Url} ({playlistToDownload.Segments.First().Duration}s), Last: {playlistToDownload.Segments.Last().Url} ({playlistToDownload.Segments.Last().Duration}s)" : "No segments";
+                        StatusText.Text = $"Direct playlist selected. Segments: {segCount}\n{segInfo}";
+                        _logger.LogInformation("[DIAG] Direct playlist. Segments: {SegCount}\n{SegInfo}", segCount, segInfo);
+                    }
+                    else
+                    {
+                        UpdateStatus("Could not determine the correct playlist for download.", true);
+                        _logger.LogError("Could not determine the correct playlist for download. SelectedItem: {Item}", selectedItem.DisplayName);
+                        return;
+                    }
+
                     if (isLive)
                     {
                         await _downloadService.DownloadLiveStreamAsync(
-                            selectedItem.Playlist,
+                            playlistToDownload,
                             outputPath,
                             outputFileName + ".ts",
                             new Progress<DownloadService.DownloadProgressInfo>(info =>
@@ -285,16 +336,31 @@ namespace VideoDownloader.WinUI.Views
                     else
                     {
                         await _downloadService.DownloadVideoAsync(
-                            selectedItem.Playlist,
+                            playlistToDownload,
                             outputPath,
                             outputFileName + ".mp4",
                             new Progress<DownloadService.DownloadProgressInfo>(info =>
                             {
-                                ProgressText.Text = $"Downloaded {info.DownloadedSegments} of {info.TotalSegments} segments ({info.ProgressPercentage:F2}%)";
-                                DownloadProgressBar.Visibility = Visibility.Visible;
-                                DownloadProgressBar.Value = info.ProgressPercentage ?? 0;
+                                // Check if the service is reporting the merging action
+                                if (!string.IsNullOrEmpty(info.CurrentAction) && info.CurrentAction.Equals("Merging", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    // Use DispatcherQueue to ensure UI updates happen on the main thread
+                                    DispatcherQueue.TryEnqueue(() => UpdateStatus("Merging segments...", false));
+                                }
+
+                                // Update progress text and bar (keep existing logic, ensure UI thread)
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                   ProgressText.Text = $"Downloaded {info.DownloadedSegments} of {info.TotalSegments} segments ({info.ProgressPercentage:F2}%)";
+                                   if (info.TotalSegments > 0) // Show progress bar only if we know total segments
+                                   {
+                                       DownloadProgressBar.Visibility = Visibility.Visible;
+                                       DownloadProgressBar.Value = info.ProgressPercentage ?? 0;
+                                   }
+                                });
                             }),
-                            cancellationToken
+                            cancellationToken,
+                            deleteTemp // Pass to service
                         );
                         UpdateStatus("Download complete!", false);
                     }
